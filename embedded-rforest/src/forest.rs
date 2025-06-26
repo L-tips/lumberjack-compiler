@@ -4,7 +4,6 @@ use core::{
     num::NonZeroU8,
 };
 
-use heapless::LinearMap;
 use zerocopy::{
     FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes,
     byteorder::little_endian::{F32, U32},
@@ -210,10 +209,9 @@ impl<'data> OptimizedForest<'data, Classification> {
 impl Predict for OptimizedForest<'_, Classification> {
     type ProblemType = Classification;
 
-    #[must_use]
     #[inline(never)]
     fn predict(&self, features: &[f32]) -> <Self::ProblemType as ProblemType>::Output {
-        let mut votes = LinearMap::<_, _, 255>::new();
+        let mut votes = [0; 255];
 
         for tree_id in 0..self.num_trees.get() {
             let mut node = &self.nodes[tree_id as usize];
@@ -235,21 +233,20 @@ impl Predict for OptimizedForest<'_, Classification> {
             };
 
             // Register the vote for this tree's prediction
-            let vote = votes.get_mut(&prediction);
-            if let Some(v) = vote {
-                *v += 1;
-            } else {
-                votes.insert(prediction, 0).unwrap();
-            }
+            let vote = votes
+                .get_mut(prediction as usize)
+                .expect("Not enough space for this class");
+            *vote += 1;
         }
 
         votes
             .into_iter()
-            .max_by_key(|&(_, count)| count)
-            .map(|(num, _)| num)
-            .copied()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.cmp(b))
             .unwrap()
-    }
+            .0
+            .try_into()
+            .unwrap()
 }
 
 impl<'data> OptimizedForest<'data, Regression> {
@@ -268,7 +265,6 @@ impl<'data> OptimizedForest<'data, Regression> {
 impl Predict for OptimizedForest<'_, Regression> {
     type ProblemType = Regression;
 
-    #[must_use]
     #[inline(never)]
     fn predict(&self, features: &[f32]) -> f32 {
         let mut result = 0.0;

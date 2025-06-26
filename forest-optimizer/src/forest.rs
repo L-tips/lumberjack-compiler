@@ -228,13 +228,11 @@ where
             .collect::<Vec<_>>();
 
         // Descend the tree, replacing each decision with an optimized node pointer.
-        let nodes = nodes
+        nodes
             .iter()
             .map(|n| P::update_pointers(&nodes, n))
             .filter_map(|mut n| n.take())
-            .collect::<Vec<_>>();
-
-        nodes
+            .collect::<Vec<_>>()
     }
 
     pub fn nodes(&self) -> &[Node<P>] {
