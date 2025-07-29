@@ -171,6 +171,10 @@ impl<P: ProblemType> OptimizedForest<'_, P> {
         self.nodes
     }
 
+    pub fn num_trees(&self) -> u32 {
+        self.num_trees.get()
+    }
+
     pub fn num_features(&self) -> u8 {
         self.num_features
     }
