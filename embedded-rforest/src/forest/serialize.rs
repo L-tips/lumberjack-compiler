@@ -20,7 +20,7 @@ impl<P: ProblemType> OptimizedForest<'_, P> {
             bytes.push(0);
         }
 
-        // Padding
+        // Padding (2 bytes)
         bytes.extend_from_slice(&[0; 2]);
 
         // Performance: reserve some extra space in the vec for all our nodes

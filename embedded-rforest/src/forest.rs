@@ -247,6 +247,7 @@ impl Predict for OptimizedForest<'_, Classification> {
             .0
             .try_into()
             .unwrap()
+    }
 }
 
 impl<'data> OptimizedForest<'data, Regression> {
