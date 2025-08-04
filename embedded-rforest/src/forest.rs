@@ -52,7 +52,7 @@ impl ProblemType for Regression {
 }
 
 #[repr(transparent)]
-#[derive(IntoBytes, Clone, KnownLayout, Immutable, FromBytes)]
+#[derive(IntoBytes, Clone, Copy, KnownLayout, Immutable, FromBytes)]
 pub struct Flags(U32);
 
 impl Flags {
@@ -65,15 +65,15 @@ impl Flags {
         Self(U32::new(val))
     }
 
-    fn left_prediction(&self) -> bool {
+    pub fn left_prediction(&self) -> bool {
         (self.0 >> (32 - 1)) & 1 != 0
     }
 
-    fn right_prediction(&self) -> bool {
+    pub fn right_prediction(&self) -> bool {
         (self.0 >> (32 - 2)) & 1 != 0
     }
 
-    fn split_var_idx(&self) -> u32 {
+    pub fn split_var_idx(&self) -> u32 {
         (self.0 & (u32::MAX >> 2)).get()
     }
 }
@@ -136,6 +136,10 @@ impl Branch {
     #[inline]
     pub fn right_ptr(&self) -> NodePointer {
         self.right
+    }
+
+    pub fn flags(&self) -> Flags {
+        self.flags
     }
 }
 

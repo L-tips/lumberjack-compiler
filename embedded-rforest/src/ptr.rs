@@ -1,7 +1,7 @@
 use core::fmt;
 use zerocopy::{
-    byteorder::little_endian::{F32, U32},
     FromBytes, Immutable, IntoBytes, KnownLayout,
+    byteorder::little_endian::{F32, U32},
 };
 
 /// A specialized relative pointer for use with optimized trees.

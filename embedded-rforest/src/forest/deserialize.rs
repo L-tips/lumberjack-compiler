@@ -77,7 +77,8 @@ impl<'a, P: ProblemType> OptimizedForest<'a, P> {
                 Some(NonZeroU8::new_unchecked(*c_ptr))
             };
 
-            // Check that the forest is of the correct problem type according to the P type parameter
+            // Check that the forest is of the correct problem type according to the P type
+            // parameter
             if (num_targets.is_some() && !P::HAS_TARGETS)
                 || (num_targets.is_none() && P::HAS_TARGETS)
             {

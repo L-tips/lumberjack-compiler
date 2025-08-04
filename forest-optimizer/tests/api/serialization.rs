@@ -1,5 +1,5 @@
-use color_eyre::eyre::eyre;
 use color_eyre::Result;
+use color_eyre::eyre::eyre;
 use embedded_rforest::forest::{Classification, OptimizedForest, Predict, Regression};
 use forest_optimizer::serialized_forest::{SerializedClassificationNode, SerializedRegressionNode};
 

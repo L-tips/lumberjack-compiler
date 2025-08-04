@@ -1,6 +1,6 @@
 use color_eyre::{
-    eyre::{eyre, Context},
     Result,
+    eyre::{Context, eyre},
 };
 
 use std::{fs::File, io::Write, path::Path};

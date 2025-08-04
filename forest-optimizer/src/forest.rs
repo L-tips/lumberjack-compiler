@@ -228,11 +228,24 @@ where
             .collect::<Vec<_>>();
 
         // Descend the tree, replacing each decision with an optimized node pointer.
-        nodes
+        let nodes = nodes
             .iter()
             .map(|n| P::update_pointers(&nodes, n))
             .filter_map(|mut n| n.take())
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+
+        // Sanity check: since each tree can be represented as a DAG, we check that no
+        // node points backwards in the tree, leading to potential circular structures.
+        for (i, n) in nodes.iter().enumerate() {
+            if !n.flags().left_prediction() {
+                assert!(n.left_ptr().as_ptr() as usize > i);
+            }
+            if !n.flags().right_prediction() {
+                assert!(n.right_ptr().as_ptr() as usize > i);
+            }
+        }
+
+        nodes
     }
 
     pub fn nodes(&self) -> &[Node<P>] {
