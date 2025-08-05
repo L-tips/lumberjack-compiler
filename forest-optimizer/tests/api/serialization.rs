@@ -20,6 +20,10 @@ fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> 
     )
     .map_err(|_| eyre!("Malformed forest"))?;
 
+    optimized
+        .verify()
+        .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
+
     let serialized = optimized.to_bytes();
     let optimized = OptimizedForest::<Classification>::deserialize(&serialized)
         .map_err(|_| eyre!("Malfomed forest"))?;
@@ -53,6 +57,10 @@ fn serialized_then_deserialized_regression_tree_is_accurate() -> Result<()> {
     let optimized = OptimizedForest::<Regression>::deserialize(&serialized)
         .map_err(|_| eyre!("Malfomed forest"))?;
 
+    optimized
+        .verify()
+        .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
+
     let test_data: Vec<airfoil::DataPoint> = get_test_data("./tests/test-data/airfoil.csv")?;
 
     for data_point in test_data {
@@ -73,6 +81,10 @@ fn classification_static_storage_deserializes_correctly() -> Result<()> {
 
     let deserialized = OptimizedForest::<Classification>::deserialize(buf)
         .map_err(|_| eyre!("Malformed forest"))?;
+
+    deserialized
+        .verify()
+        .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
 
     let test_data: Vec<iris::DataPoint> = get_test_data("./tests/test-data/iris.csv")?;
 
@@ -95,6 +107,10 @@ fn regression_static_storage_deserializes_correctly() -> Result<()> {
 
     let deserialized =
         OptimizedForest::<Regression>::deserialize(buf).map_err(|_| eyre!("Malformed forest"))?;
+
+    deserialized
+        .verify()
+        .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
 
     let test_data: Vec<airfoil::DataPoint> = get_test_data("./tests/test-data/airfoil.csv")?;
 

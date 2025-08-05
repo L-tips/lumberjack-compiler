@@ -1,11 +1,11 @@
-use color_eyre::Result;
+use color_eyre::{Result, eyre::eyre};
 use embedded_rforest::forest::{Classification, OptimizedForest, Regression};
 use forest_optimizer::serialized_forest::{SerializedClassificationNode, SerializedRegressionNode};
 
 use crate::helpers::get_forest;
 
 #[test]
-fn serialized_classification_rejects_regression_deserialization() {
+fn serialized_classification_rejects_regression_deserialization() -> Result<()> {
     let forest =
         get_forest::<SerializedClassificationNode>("./tests/test-forests/forest_iris_5.csv")
             .unwrap();
@@ -19,8 +19,14 @@ fn serialized_classification_rejects_regression_deserialization() {
     )
     .unwrap();
 
+    optimized
+        .verify()
+        .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
+
     let serialized = optimized.to_bytes();
     assert!(OptimizedForest::<Regression>::deserialize(&serialized).is_err());
+
+    Ok(())
 }
 
 #[test]

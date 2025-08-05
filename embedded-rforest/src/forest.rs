@@ -183,6 +183,30 @@ impl<P: ProblemType> OptimizedForest<'_, P> {
         self.num_features
     }
 
+    pub fn verify(&self) -> Result<(), Error> {
+        let nodes_len = self.nodes().len();
+
+        for (i, branch) in self.nodes().iter().enumerate() {
+            let is_left_prediction = branch.flags().left_prediction();
+            let is_right_prediction = branch.flags().right_prediction();
+
+            let left_ptr = branch.left_ptr().as_ptr() as usize;
+            let right_ptr = branch.right_ptr().as_ptr() as usize;
+
+            if (!is_left_prediction && (left_ptr <= i || left_ptr >= nodes_len))
+                || (!is_right_prediction && (right_ptr <= i || right_ptr >= nodes_len))
+            {
+                #[cfg(feature = "std")]
+                println!(
+                    "Malformed forest: idx: {i}, nodes_len: {nodes_len}, is_left_prediction: {is_left_prediction}, is_right_prediction: {is_right_prediction}, left_ptr: {left_ptr}, right_ptr: {right_ptr}"
+                );
+                return Err(Error::MalformedForest);
+            }
+        }
+
+        Ok(())
+    }
+
     fn next_left(&self, branch: &Branch) -> &Branch {
         &self.nodes[branch.left_ptr().as_ptr() as usize]
     }

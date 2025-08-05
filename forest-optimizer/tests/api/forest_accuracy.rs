@@ -50,6 +50,10 @@ fn verify_optimized_forest_accuracy_iris_880_trees() -> Result<()> {
     )
     .map_err(|_| eyre!("Malformed forest"))?;
 
+    optimized
+        .verify()
+        .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
+
     let test_data: Vec<iris::DataPoint> = get_test_data("./tests/test-data/iris.csv")?;
 
     for data_point in test_data {
@@ -74,6 +78,10 @@ fn verify_optimized_forest_accuracy_airfoil_100_trees() -> Result<()> {
         forest.num_features().try_into().unwrap(),
     )
     .map_err(|_| eyre!("Malformed forest"))?;
+
+    optimized
+        .verify()
+        .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
 
     let test_data: Vec<airfoil::DataPoint> = get_test_data("./tests/test-data/airfoil.csv")?;
 
