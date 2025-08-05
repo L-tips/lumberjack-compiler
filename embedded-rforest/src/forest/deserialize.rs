@@ -8,7 +8,7 @@ use super::{Branch, OptimizedForest, ProblemType};
 
 #[macro_export]
 macro_rules! static_storage {
-    ($file:literal $(, unsafe(link_section = $section:literal))?) => {{
+    ($file:expr $(, unsafe(link_section = $section:literal))?) => {{
         const BYTES_LEN: usize = include_bytes!($file).len();
 
         $(#[unsafe(link_section = $section)])?
