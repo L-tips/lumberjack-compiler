@@ -4,6 +4,7 @@ use std::fmt;
 
 use color_eyre::Result;
 use embedded_rforest::ptr::NodePointer;
+use half::bf16;
 
 use crate::{
     problem_type::{Classification, Map, ProblemType, Regression},
@@ -13,7 +14,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct BranchNode {
     pub(super) split_with: u32,
-    pub(super) split_at: f32,
+    pub(super) split_at: bf16,
     pub(super) left: u32,
     pub(super) right: u32,
 }
@@ -276,7 +277,7 @@ where
 struct TransitionBranch<P: ProblemType> {
     id: u32,
     split_with: u32,
-    split_at: f32,
+    split_at: bf16,
     left: TransitionNode<P>,
     right: TransitionNode<P>,
 }
@@ -324,7 +325,7 @@ impl Forest<Classification> {
     }
 
     /// Make a prediction based on input values (features)
-    pub fn predict(&self, features: &[f32]) -> String {
+    pub fn predict(&self, features: &[bf16]) -> String {
         // Reserve space to store each tree's prediction
         let mut results = Vec::with_capacity(self.num_trees);
 
@@ -373,39 +374,39 @@ impl Forest<Classification> {
     }
 }
 
-impl Forest<Regression> {
-    /// Make a prediction based on input values (features)
-    pub fn predict(&self, features: &[f32]) -> f32 {
-        // Reserve space to store each tree's prediction
-        let mut result = 0.0;
+// impl Forest<Regression> {
+//     /// Make a prediction based on input values (features)
+//     pub fn predict(&self, features: &[f32]) -> f32 {
+//         // Reserve space to store each tree's prediction
+//         let mut result = 0.0;
 
-        // Descend into each tree to make a prediction
-        for tree_id in 0..self.num_trees {
-            // The tree root is stored at the tree index
-            let mut node = &self.nodes[tree_id];
+//         // Descend into each tree to make a prediction
+//         for tree_id in 0..self.num_trees {
+//             // The tree root is stored at the tree index
+//             let mut node = &self.nodes[tree_id];
 
-            let prediction = loop {
-                match node {
-                    Node::Branch(b) => {
-                        let test = features[b.split_with as usize] <= b.split_at;
-                        if test {
-                            node = self.next_left(b)
-                        } else {
-                            node = self.next_right(b)
-                        }
-                    }
-                    Node::Leaf(l) => {
-                        break l.prediction;
-                    }
-                }
-            };
+//             let prediction = loop {
+//                 match node {
+//                     Node::Branch(b) => {
+//                         let test = features[b.split_with as usize] <= b.split_at;
+//                         if test {
+//                             node = self.next_left(b)
+//                         } else {
+//                             node = self.next_right(b)
+//                         }
+//                     }
+//                     Node::Leaf(l) => {
+//                         break l.prediction;
+//                     }
+//                 }
+//             };
 
-            result += prediction;
-        }
+//             result += prediction;
+//         }
 
-        result / self.num_trees as f32
-    }
-}
+//         result / self.num_trees as f32
+//     }
+// }
 
 impl fmt::Display for Forest<Classification> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -504,47 +505,58 @@ impl UpdatePointers for Classification {
         };
 
         Some(embedded_rforest::forest::Branch::new(
-            branch.split_with,
+            branch
+                .split_with
+                .try_into()
+                .expect("split_with does not fit into u16"),
             branch.split_at,
-            NodePointer::new_ptr(left_val),
-            NodePointer::new_ptr(right_val),
+            NodePointer::new_ptr(
+                left_val
+                    .try_into()
+                    .expect("left branch does not fit in u16"),
+            ),
+            NodePointer::new_ptr(
+                right_val
+                    .try_into()
+                    .expect("right branch does not fit into u16"),
+            ),
             left_pred,
             right_pred,
         ))
     }
 }
 
-impl UpdatePointers for Regression {
-    fn update_pointers(
-        nodes: &[RefCell<Option<TransitionBranch<Self>>>],
-        branch: &RefCell<Option<TransitionBranch<Self>>>,
-    ) -> Option<embedded_rforest::forest::Branch> {
-        let branch = branch.borrow();
-        let branch = branch.as_ref()?;
+// impl UpdatePointers for Regression {
+//     fn update_pointers(
+//         nodes: &[RefCell<Option<TransitionBranch<Self>>>],
+//         branch: &RefCell<Option<TransitionBranch<Self>>>,
+//     ) -> Option<embedded_rforest::forest::Branch> {
+//         let branch = branch.borrow();
+//         let branch = branch.as_ref()?;
 
-        let (left_pred, left_ptr) = match branch.left {
-            TransitionNode::Leaf(l) => (true, NodePointer::new_f32(l)),
-            TransitionNode::Branch(b) => {
-                let next = nodes[b as usize].borrow().as_ref()?.id;
-                (false, NodePointer::new_ptr(next))
-            }
-        };
+//         let (left_pred, left_ptr) = match branch.left {
+//             TransitionNode::Leaf(l) => (true, NodePointer::new_f32(l)),
+//             TransitionNode::Branch(b) => {
+//                 let next = nodes[b as usize].borrow().as_ref()?.id;
+//                 (false, NodePointer::new_ptr(next))
+//             }
+//         };
 
-        let (right_pred, right_ptr) = match branch.right {
-            TransitionNode::Leaf(l) => (true, NodePointer::new_f32(l)),
-            TransitionNode::Branch(b) => {
-                let next = nodes[b as usize].borrow().as_ref()?.id;
-                (false, NodePointer::new_ptr(next))
-            }
-        };
+//         let (right_pred, right_ptr) = match branch.right {
+//             TransitionNode::Leaf(l) => (true, NodePointer::new_f32(l)),
+//             TransitionNode::Branch(b) => {
+//                 let next = nodes[b as usize].borrow().as_ref()?.id;
+//                 (false, NodePointer::new_ptr(next))
+//             }
+//         };
 
-        Some(embedded_rforest::forest::Branch::new(
-            branch.split_with,
-            branch.split_at,
-            left_ptr,
-            right_ptr,
-            left_pred,
-            right_pred,
-        ))
-    }
-}
+//         Some(embedded_rforest::forest::Branch::new(
+//             branch.split_with,
+//             branch.split_at,
+//             left_ptr,
+//             right_ptr,
+//             left_pred,
+//             right_pred,
+//         ))
+//     }
+// }

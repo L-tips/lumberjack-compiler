@@ -9,6 +9,7 @@ use std::{fs, io};
 
 use color_eyre::Result;
 use color_eyre::eyre::{Context, ContextCompat, OptionExt, eyre};
+use half::bf16;
 use serde::{Deserialize, Deserializer};
 
 pub trait NodeType {}
@@ -119,7 +120,7 @@ impl SerializedNode for SerializedClassificationNode {
                 split_with: self
                     .feature_id(problem.features())
                     .ok_or_eyre("Feature ID missing")?,
-                split_at: self.split_at,
+                split_at: bf16::from_f32(self.split_at),
                 left: self.left - 1,
                 right: self.right - 1,
             };
@@ -222,7 +223,7 @@ impl SerializedNode for SerializedRegressionNode {
                 split_with: self
                     .feature_id(problem.features())
                     .ok_or_eyre("Feature ID missing")?,
-                split_at: self.split_at,
+                split_at: bf16::from_f32(self.split_at),
                 left: self.left - 1,
                 right: self.right - 1,
             };

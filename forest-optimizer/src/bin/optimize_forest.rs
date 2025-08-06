@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
-use color_eyre::Result;
-use forest_optimizer::write_forest::{write_classification, write_regression};
+use color_eyre::{Result, eyre::eyre};
+use forest_optimizer::write_forest::write_classification;
 
 use std::path::PathBuf;
 
@@ -33,6 +33,9 @@ fn main() -> Result<()> {
 
     match args.problem_type {
         ProblemType::Classification => write_classification(args.input, args.output),
-        ProblemType::Regression => write_regression(args.input, args.output),
+        // ProblemType::Regression => write_regression(args.input, args.output),
+        ProblemType::Regression => Err(eyre!(
+            "EXPERIMENTAL: Regression is not yet supported with bf16"
+        )),
     }
 }

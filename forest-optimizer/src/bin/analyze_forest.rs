@@ -40,7 +40,10 @@ fn main() -> Result<()> {
 
     match args.problem_type {
         ProblemType::Classification => analyze_classification(args.input, args.print),
-        ProblemType::Regression => analyze_regression(args.input, args.print),
+        // ProblemType::Regression => analyze_regression(args.input, args.print),
+        ProblemType::Regression => Err(eyre!(
+            "EXPERIMENTAL: Regression is not yet supported with bf16"
+        )),
     }
 }
 
@@ -109,66 +112,66 @@ fn analyze_classification(input: impl AsRef<Path>, print: bool) -> Result<()> {
     Ok(())
 }
 
-fn analyze_regression(input: impl AsRef<Path>, print: bool) -> Result<()> {
-    let serialized = SerializedForest::<SerializedRegressionNode>::read(&input)
-        .context("Could not read forest definition file.")?;
-    let forest = Forest::from_serialized(serialized)?;
+// fn analyze_regression(input: impl AsRef<Path>, print: bool) -> Result<()> {
+//     let serialized = SerializedForest::<SerializedRegressionNode>::read(&input)
+//         .context("Could not read forest definition file.")?;
+//     let forest = Forest::from_serialized(serialized)?;
 
-    let mut branch_cnt = 0;
-    let mut leaf_cnt = 0;
-    for n in forest.nodes() {
-        if matches!(n, Node::Branch(_)) {
-            branch_cnt += 1;
-        } else {
-            leaf_cnt += 1;
-        }
-    }
+//     let mut branch_cnt = 0;
+//     let mut leaf_cnt = 0;
+//     for n in forest.nodes() {
+//         if matches!(n, Node::Branch(_)) {
+//             branch_cnt += 1;
+//         } else {
+//             leaf_cnt += 1;
+//         }
+//     }
 
-    println!("Forest is a REGRESSION problem.\n\n");
+//     println!("Forest is a REGRESSION problem.\n\n");
 
-    let forest_len = forest.nodes().len();
-    println!(
-        "--- Unoptimized forest ---\nTotal length: {} | Branches: {} , leaves: {} | Size: {} bytes\n--------------------------\n\n",
-        forest_len,
-        branch_cnt,
-        leaf_cnt,
-        size_of_val(forest.nodes())
-    );
+//     let forest_len = forest.nodes().len();
+//     println!(
+//         "--- Unoptimized forest ---\nTotal length: {} | Branches: {} , leaves: {} | Size: {} bytes\n--------------------------\n\n",
+//         forest_len,
+//         branch_cnt,
+//         leaf_cnt,
+//         size_of_val(forest.nodes())
+//     );
 
-    if print {
-        println!("Forest: {:?}", forest);
-    }
+//     if print {
+//         println!("Forest: {:?}", forest);
+//     }
 
-    let optimized_nodes = forest.optimize_nodes();
-    let optimized = OptimizedForest::<Regression>::new(
-        forest.num_trees().try_into().unwrap(),
-        &optimized_nodes,
-        forest.num_features().try_into().unwrap(),
-    )
-    .map_err(|_| eyre!("Malformed forest"))?;
+//     let optimized_nodes = forest.optimize_nodes();
+//     let optimized = OptimizedForest::<Regression>::new(
+//         forest.num_trees().try_into().unwrap(),
+//         &optimized_nodes,
+//         forest.num_features().try_into().unwrap(),
+//     )
+//     .map_err(|_| eyre!("Malformed forest"))?;
 
-    let optimized_len = optimized.nodes().len();
+//     let optimized_len = optimized.nodes().len();
 
-    let serialized = optimized.to_bytes();
-    let ptr = serialized.as_ptr();
-    assert!(ptr as usize % align_of::<OptimizedForest<Regression>>() == 0);
+//     let serialized = optimized.to_bytes();
+//     let ptr = serialized.as_ptr();
+//     assert!(ptr as usize % align_of::<OptimizedForest<Regression>>() == 0);
 
-    println!(
-        "--- Optimized forest ---\nTotal length: {} | Branches: {} , leaves: {} | Size: {}\n--------------------------\n\n",
-        optimized_len,
-        optimized_len,
-        0,
-        serialized.len()
-    );
+//     println!(
+//         "--- Optimized forest ---\nTotal length: {} | Branches: {} , leaves: {} | Size: {}\n--------------------------\n\n",
+//         optimized_len,
+//         optimized_len,
+//         0,
+//         serialized.len()
+//     );
 
-    let pruned = (forest_len as f32 - optimized_len as f32) / (forest_len as f32);
-    println!(
-        "--- Analysis results ---\nPruned {:.2}%, Kept {:.2}%\n--------------------------\n\n",
-        pruned * 100.0,
-        (1.0 - pruned) * 100.0,
-    );
+//     let pruned = (forest_len as f32 - optimized_len as f32) / (forest_len as f32);
+//     println!(
+//         "--- Analysis results ---\nPruned {:.2}%, Kept {:.2}%\n--------------------------\n\n",
+//         pruned * 100.0,
+//         (1.0 - pruned) * 100.0,
+//     );
 
-    let _deserialized = OptimizedForest::<Regression>::deserialize(&serialized);
+//     let _deserialized = OptimizedForest::<Regression>::deserialize(&serialized);
 
-    Ok(())
-}
+//     Ok(())
+// }

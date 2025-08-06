@@ -4,9 +4,10 @@ use core::{
     num::NonZeroU8,
 };
 
+use half::bf16;
 use zerocopy::{
     FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes,
-    byteorder::little_endian::{F32, U32},
+    byteorder::little_endian::{U16, U32},
 };
 
 use crate::{Error, ptr::NodePointer};
@@ -25,7 +26,7 @@ pub trait Predict {
     type ProblemType: ProblemType;
 
     /// Make a prediction based on input values (features)
-    fn predict(&self, features: &[f32]) -> <Self::ProblemType as ProblemType>::Output;
+    fn predict(&self, features: &[bf16]) -> <Self::ProblemType as ProblemType>::Output;
 }
 
 pub struct Classification {
@@ -53,28 +54,28 @@ impl ProblemType for Regression {
 
 #[repr(transparent)]
 #[derive(IntoBytes, Clone, Copy, KnownLayout, Immutable, FromBytes)]
-pub struct Flags(U32);
+pub struct Flags(U16);
 
 impl Flags {
-    fn new(split_var_idx: u32, left_is_prediction: bool, right_is_prediction: bool) -> Self {
-        assert!(split_var_idx <= u32::MAX >> 2);
+    fn new(split_var_idx: u16, left_is_prediction: bool, right_is_prediction: bool) -> Self {
+        assert!(split_var_idx <= u16::MAX >> 2);
 
         let val = split_var_idx
-            | ((left_is_prediction as u32) << (32 - 1))
-            | ((right_is_prediction as u32) << (32 - 2));
-        Self(U32::new(val))
+            | ((left_is_prediction as u16) << (16 - 1))
+            | ((right_is_prediction as u16) << (16 - 2));
+        Self(U16::new(val))
     }
 
     pub fn left_prediction(&self) -> bool {
-        (self.0 >> (32 - 1)) & 1 != 0
+        (self.0 >> (16 - 1)) & 1 != 0
     }
 
     pub fn right_prediction(&self) -> bool {
-        (self.0 >> (32 - 2)) & 1 != 0
+        (self.0 >> (16 - 2)) & 1 != 0
     }
 
-    pub fn split_var_idx(&self) -> u32 {
-        (self.0 & (u32::MAX >> 2)).get()
+    pub fn split_var_idx(&self) -> u16 {
+        (self.0 & (u16::MAX >> 2)).get()
     }
 }
 
@@ -95,15 +96,15 @@ impl Debug for Flags {
 pub struct Branch {
     left: NodePointer,
     right: NodePointer,
-    split_at: F32,
+    split_at: bf16,
     flags: Flags,
 }
 
 impl Branch {
     #[inline]
     pub fn new(
-        split_with: u32,
-        split_at: f32,
+        split_with: u16,
+        split_at: bf16,
         left: NodePointer,
         right: NodePointer,
         left_leaf: bool,
@@ -112,20 +113,20 @@ impl Branch {
         let flags = Flags::new(split_with, left_leaf, right_leaf);
         Self {
             flags,
-            split_at: F32::new(split_at),
+            split_at,
             left,
             right,
         }
     }
 
     #[inline]
-    pub fn split_with(&self) -> u32 {
+    pub fn split_with(&self) -> u16 {
         self.flags.split_var_idx()
     }
 
     #[inline]
-    pub fn split_at(&self) -> f32 {
-        self.split_at.get()
+    pub fn split_at(&self) -> bf16 {
+        self.split_at
     }
 
     #[inline]
@@ -242,7 +243,7 @@ impl Predict for OptimizedForest<'_, Classification> {
     type ProblemType = Classification;
 
     #[inline(never)]
-    fn predict(&self, features: &[f32]) -> <Self::ProblemType as ProblemType>::Output {
+    fn predict(&self, features: &[bf16]) -> <Self::ProblemType as ProblemType>::Output {
         let mut votes = [0; 255];
 
         for tree_id in 0..self.num_trees.get() {
@@ -295,39 +296,39 @@ impl<'data> OptimizedForest<'data, Regression> {
     }
 }
 
-impl Predict for OptimizedForest<'_, Regression> {
-    type ProblemType = Regression;
+// impl Predict for OptimizedForest<'_, Regression> {
+//     type ProblemType = Regression;
 
-    #[inline(never)]
-    fn predict(&self, features: &[f32]) -> f32 {
-        let mut result = 0.0;
+//     #[inline(never)]
+//     fn predict(&self, features: &[f32]) -> f32 {
+//         let mut result = 0.0;
 
-        for tree_id in 0..self.num_trees.get() {
-            let mut node = &self.nodes[tree_id as usize];
+//         for tree_id in 0..self.num_trees.get() {
+//             let mut node = &self.nodes[tree_id as usize];
 
-            let prediction = loop {
-                let test = features[node.split_with() as usize] <= node.split_at();
+//             let prediction = loop {
+//                 let test = features[node.split_with() as usize] <= node.split_at();
 
-                if test {
-                    if node.flags.left_prediction() {
-                        break node.left_ptr().as_f32();
-                    } else {
-                        node = self.next_left(node);
-                    }
-                } else if node.flags.right_prediction() {
-                    break node.right_ptr().as_f32();
-                } else {
-                    node = self.next_right(node);
-                }
-            };
+//                 if test {
+//                     if node.flags.left_prediction() {
+//                         break node.left_ptr().as_f32();
+//                     } else {
+//                         node = self.next_left(node);
+//                     }
+//                 } else if node.flags.right_prediction() {
+//                     break node.right_ptr().as_f32();
+//                 } else {
+//                     node = self.next_right(node);
+//                 }
+//             };
 
-            // Register the vote for this tree's prediction
-            result += prediction;
-        }
+//             // Register the vote for this tree's prediction
+//             result += prediction;
+//         }
 
-        result / self.num_trees.get() as f32
-    }
-}
+//         result / self.num_trees.get() as f32
+//     }
+// }
 
 impl<P: ProblemType> fmt::Display for OptimizedForest<'_, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

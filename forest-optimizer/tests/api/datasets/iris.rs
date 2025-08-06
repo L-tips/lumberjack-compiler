@@ -1,16 +1,18 @@
 use std::collections::HashMap;
 
+use half::bf16;
+
 /// Datapoints and forest generated using the `iris` R sample dataset
 #[derive(serde::Deserialize, Debug)]
 pub(crate) struct DataPoint {
     #[serde(rename = "Sepal.Length")]
-    pub sepal_length: f32,
+    pub sepal_length: bf16,
     #[serde(rename = "Petal.Length")]
-    pub petal_length: f32,
+    pub petal_length: bf16,
     #[serde(rename = "Sepal.Width")]
-    pub sepal_width: f32,
+    pub sepal_width: bf16,
     #[serde(rename = "Petal.Width")]
-    pub petal_width: f32,
+    pub petal_width: bf16,
     #[serde(rename = "Species")]
     #[expect(dead_code)]
     pub true_species: String,
@@ -19,8 +21,8 @@ pub(crate) struct DataPoint {
 }
 
 impl DataPoint {
-    pub fn transform_features(&self, feature_map: &HashMap<String, u32>) -> [f32; 4] {
-        let mut features = [0.0, 0.0, 0.0, 0.0];
+    pub fn transform_features(&self, feature_map: &HashMap<String, u32>) -> [bf16; 4] {
+        let mut features = [bf16::ZERO; 4];
 
         let feats = [
             (self.sepal_length, "Sepal.Length"),

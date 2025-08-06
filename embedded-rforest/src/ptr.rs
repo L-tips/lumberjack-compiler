@@ -1,8 +1,6 @@
 use core::fmt;
-use zerocopy::{
-    FromBytes, Immutable, IntoBytes, KnownLayout,
-    byteorder::little_endian::{F32, U32},
-};
+use half::bf16;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, byteorder::little_endian::U16};
 
 /// A specialized relative pointer for use with optimized trees.
 ///
@@ -13,26 +11,26 @@ use zerocopy::{
 /// * If the first bit is 0, the next node in the tree is a branch.
 #[repr(transparent)]
 #[derive(Clone, Copy, IntoBytes, KnownLayout, Immutable, FromBytes)]
-pub struct NodePointer(U32);
+pub struct NodePointer(U16);
 
 impl NodePointer {
-    pub fn new_ptr(ptr: u32) -> Self {
-        Self(U32::new(ptr))
+    pub fn new_ptr(ptr: u16) -> Self {
+        Self(U16::new(ptr))
     }
 
-    pub fn new_f32(float: f32) -> Self {
-        let float = F32::new(float);
-        Self(U32::from_bytes(float.to_bytes()))
+    pub fn new_f32(float: bf16) -> Self {
+        // let float = F32::new(float);
+        Self(U16::from_bytes(float.to_le_bytes()))
     }
 
     /// Return the pointer representation as a raw integer.
-    pub fn as_ptr(&self) -> u32 {
+    pub fn as_ptr(&self) -> u16 {
         self.0.get()
     }
 
-    pub fn as_f32(&self) -> F32 {
+    pub fn as_f32(&self) -> bf16 {
         let bytes = self.0.to_bytes();
-        F32::from_bytes(bytes)
+        bf16::from_le_bytes(bytes)
     }
 }
 
