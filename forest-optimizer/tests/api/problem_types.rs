@@ -46,41 +46,41 @@ fn serialized_classification_rejects_regression_optimization() {
     );
 }
 
-// #[test]
-// fn serialized_regression_rejects_classification_deserialization() -> Result<()> {
-//     let forest =
-//         get_forest::<SerializedRegressionNode>("./tests/test-forests/airfoil_100_200.csv").unwrap();
+#[test]
+fn serialized_regression_rejects_classification_deserialization() -> Result<()> {
+    let forest =
+        get_forest::<SerializedRegressionNode>("./tests/test-forests/airfoil_100_50.csv").unwrap();
 
-//     let nodes = forest.optimize_nodes();
-//     let optimized = OptimizedForest::<Regression>::new(
-//         forest.num_trees().try_into().unwrap(),
-//         &nodes,
-//         forest.num_features().try_into().unwrap(),
-//     )
-//     .unwrap();
+    let nodes = forest.optimize_nodes();
+    let optimized = OptimizedForest::<Regression>::new(
+        forest.num_trees().try_into().unwrap(),
+        &nodes,
+        forest.num_features().try_into().unwrap(),
+    )
+    .unwrap();
 
-//     let serialized = optimized.to_bytes();
-//     assert!(OptimizedForest::<Classification>::deserialize(&serialized).is_err());
+    let serialized = optimized.to_bytes();
+    assert!(OptimizedForest::<Classification>::deserialize(&serialized).is_err());
 
-//     Ok(())
-// }
+    Ok(())
+}
 
-// #[test]
-// fn serialized_regression_rejects_classification_optimization() {
-//     let forest =
-//         get_forest::<SerializedRegressionNode>("./tests/test-forests/airfoil_100_200.csv").unwrap();
+#[test]
+fn serialized_regression_rejects_classification_optimization() {
+    let forest =
+        get_forest::<SerializedRegressionNode>("./tests/test-forests/airfoil_100_50.csv").unwrap();
 
-//     let nodes = forest.optimize_nodes();
-//     assert!(
-//         OptimizedForest::<Classification>::new(
-//             forest.num_trees().try_into().unwrap(),
-//             &nodes,
-//             forest.num_features().try_into().unwrap(),
-//             Classification::new(2).unwrap(),
-//         )
-//         .is_err()
-//     );
-// }
+    let nodes = forest.optimize_nodes();
+    assert!(
+        OptimizedForest::<Classification>::new(
+            forest.num_trees().try_into().unwrap(),
+            &nodes,
+            forest.num_features().try_into().unwrap(),
+            Classification::new(2).unwrap(),
+        )
+        .is_err()
+    );
+}
 
 #[test]
 fn serialization_rejects_wrong_type() -> Result<()> {
@@ -89,7 +89,7 @@ fn serialization_rejects_wrong_type() -> Result<()> {
     );
 
     assert!(
-        get_forest::<SerializedClassificationNode>("./tests/test-forests/airfoil_100_200.csv")
+        get_forest::<SerializedClassificationNode>("./tests/test-forests/airfoil_100_50.csv")
             .is_err()
     );
 

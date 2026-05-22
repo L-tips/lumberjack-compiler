@@ -6,13 +6,13 @@ use half::bf16;
 #[derive(serde::Deserialize, Debug)]
 pub(crate) struct DataPoint {
     #[serde(rename = "Sepal.Length")]
-    pub sepal_length: bf16,
+    pub sepal_length: f32,
     #[serde(rename = "Petal.Length")]
-    pub petal_length: bf16,
+    pub petal_length: f32,
     #[serde(rename = "Sepal.Width")]
-    pub sepal_width: bf16,
+    pub sepal_width: f32,
     #[serde(rename = "Petal.Width")]
-    pub petal_width: bf16,
+    pub petal_width: f32,
     #[serde(rename = "Species")]
     #[expect(dead_code)]
     pub true_species: String,
@@ -21,7 +21,7 @@ pub(crate) struct DataPoint {
 }
 
 impl DataPoint {
-    pub fn transform_features(&self, feature_map: &HashMap<String, u32>) -> [bf16; 4] {
+    pub fn transform_features(&self, feature_map: &HashMap<String, u16>) -> [bf16; 4] {
         let mut features = [bf16::ZERO; 4];
 
         let feats = [
@@ -33,7 +33,7 @@ impl DataPoint {
 
         for feat in feats {
             let position = feature_map.get(feat.1).unwrap();
-            features[*position as usize] = feat.0;
+            features[*position as usize] = bf16::from_f32(feat.0);
         }
 
         features

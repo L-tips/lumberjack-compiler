@@ -21,20 +21,20 @@ fn verify_regular_forest_accuracy_iris_800_trees() -> Result<()> {
     Ok(())
 }
 
-// #[test]
-// fn verify_regular_forest_accuracy_airfoil_100_trees() -> Result<()> {
-//     let forest =
-//         get_forest::<SerializedRegressionNode>("./tests/test-forests/airfoil_100_200.csv")?;
-//     let test_data: Vec<airfoil::DataPoint> = get_test_data("./tests/test-data/airfoil.csv")?;
+#[test]
+#[ignore]
+fn verify_regular_forest_accuracy_airfoil_100_trees() -> Result<()> {
+    let forest = get_forest::<SerializedRegressionNode>("./tests/test-forests/airfoil_100_50.csv")?;
+    let test_data: Vec<airfoil::DataPoint> = get_test_data("./tests/test-data/airfoil.csv")?;
 
-//     for data_point in test_data {
-//         let features = data_point.transform_features(forest.features());
-//         let prediction = forest.predict(&features);
-//         assert_epsilon(prediction, data_point.forest_prediction, 2.5);
-//     }
+    for data_point in test_data {
+        let features = data_point.transform_features(forest.features());
+        let prediction = forest.predict(&features);
+        assert_epsilon(prediction, data_point.forest_prediction, 2.5);
+    }
 
-//     Ok(())
-// }
+    Ok(())
+}
 
 #[test]
 fn verify_optimized_forest_accuracy_iris_880_trees() -> Result<()> {
@@ -66,30 +66,30 @@ fn verify_optimized_forest_accuracy_iris_880_trees() -> Result<()> {
     Ok(())
 }
 
-// #[test]
-// fn verify_optimized_forest_accuracy_airfoil_100_trees() -> Result<()> {
-//     let forest =
-//         get_forest::<SerializedRegressionNode>("./tests/test-forests/airfoil_100_200.csv")?;
+#[test]
+#[ignore]
+fn verify_optimized_forest_accuracy_airfoil_100_trees() -> Result<()> {
+    let forest = get_forest::<SerializedRegressionNode>("./tests/test-forests/airfoil_100_50.csv")?;
 
-//     let nodes = forest.optimize_nodes();
-//     let optimized = OptimizedForest::<Regression>::new(
-//         forest.num_trees().try_into().unwrap(),
-//         &nodes,
-//         forest.num_features().try_into().unwrap(),
-//     )
-//     .map_err(|_| eyre!("Malformed forest"))?;
+    let nodes = forest.optimize_nodes();
+    let optimized = OptimizedForest::<Regression>::new(
+        forest.num_trees().try_into().unwrap(),
+        &nodes,
+        forest.num_features().try_into().unwrap(),
+    )
+    .map_err(|_| eyre!("Malformed forest"))?;
 
-//     optimized
-//         .verify()
-//         .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
+    optimized
+        .verify()
+        .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
 
-//     let test_data: Vec<airfoil::DataPoint> = get_test_data("./tests/test-data/airfoil.csv")?;
+    let test_data: Vec<airfoil::DataPoint> = get_test_data("./tests/test-data/airfoil.csv")?;
 
-//     for data_point in test_data {
-//         let features = data_point.transform_features(forest.features());
-//         let prediction = optimized.predict(&features);
-//         assert_epsilon(prediction, data_point.forest_prediction, 2.5);
-//     }
+    for data_point in test_data {
+        let features = data_point.transform_features(forest.features());
+        let prediction = optimized.predict(&features);
+        assert_epsilon(prediction.to_f32(), data_point.forest_prediction, 2.5);
+    }
 
-//     Ok(())
-// }
+    Ok(())
+}

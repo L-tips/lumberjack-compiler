@@ -40,10 +40,10 @@ pub struct SerializedClassificationNode {
     pub node_idx: usize,
     /// Pointer to left branch node
     #[serde(rename = "left daughter")]
-    pub left: u32,
+    pub left: usize,
     /// Pointer to right branch node
     #[serde(rename = "right daughter")]
-    pub right: u32,
+    pub right: usize,
     /// The variable on which to split
     #[serde(rename = "split var", deserialize_with = "string_or_na")]
     pub split_on: Option<String>,
@@ -60,12 +60,12 @@ pub struct SerializedClassificationNode {
 
 impl SerializedClassificationNode {
     /// Find the feature ID of this node's split variable
-    pub fn feature_id(&self, features_map: &Map) -> Option<u32> {
+    pub fn feature_id(&self, features_map: &Map) -> Option<u16> {
         features_map.get(self.split_on.as_ref()?).copied()
     }
 
     /// Find the target ID of this node's prediction
-    pub fn target_id(&self, targets_map: &Map) -> Option<u32> {
+    pub fn target_id(&self, targets_map: &Map) -> Option<u16> {
         targets_map.get(self.prediction.as_ref()?).copied()
     }
 }
@@ -156,10 +156,10 @@ pub struct SerializedRegressionNode {
     pub node_idx: usize,
     /// Pointer to left branch node
     #[serde(rename = "left daughter")]
-    pub left: u32,
+    pub left: usize,
     /// Pointer to right branch node
     #[serde(rename = "right daughter")]
-    pub right: u32,
+    pub right: usize,
     /// The variable on which to split
     #[serde(rename = "split var", deserialize_with = "string_or_na")]
     pub split_on: Option<String>,
@@ -175,7 +175,7 @@ pub struct SerializedRegressionNode {
 
 impl SerializedRegressionNode {
     /// Find the feature ID of this node's split variable
-    pub fn feature_id(&self, features_map: &Map) -> Option<u32> {
+    pub fn feature_id(&self, features_map: &Map) -> Option<u16> {
         features_map.get(self.split_on.as_ref()?).copied()
     }
 

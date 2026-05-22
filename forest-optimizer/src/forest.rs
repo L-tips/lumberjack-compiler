@@ -13,10 +13,10 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct BranchNode {
-    pub(super) split_with: u32,
+    pub(super) split_with: u16,
     pub(super) split_at: bf16,
-    pub(super) left: u32,
-    pub(super) right: u32,
+    pub(super) left: usize,
+    pub(super) right: usize,
 }
 
 impl fmt::Display for BranchNode {
@@ -65,7 +65,6 @@ impl<P: ProblemType> Node<P> {
         // nodes to be in front)
         let offset =
             tree_sizes[..tree_index].iter().sum::<usize>() + tree_sizes.len() - (tree_index + 1);
-        let offset: u32 = offset.try_into().expect("Offset overflow");
 
         if let Node::Branch(mut branch) = self {
             branch.left += offset;
@@ -158,7 +157,7 @@ where
                         }
                     })
                     .collect::<Vec<_>>();
-                nodes.sort_by(|(a, _), (b, _)| a.cmp(b));
+                nodes.sort_by_key(|(a, _)| *a);
                 nodes
                     .into_iter()
                     .map(|(_, n)| n)
@@ -191,7 +190,6 @@ where
 
         for (i, node) in forest_nodes.iter().enumerate() {
             // Verify that our forest size fits in an u32
-            let i: u32 = i.try_into().expect("Index overflow");
 
             // Ensure that every node only ever branches to another node further down the
             // vec
@@ -266,17 +264,17 @@ where
     }
 
     fn next_left(&self, branch: &BranchNode) -> &Node<P> {
-        &self.nodes[branch.left as usize]
+        &self.nodes[branch.left]
     }
 
     fn next_right(&self, branch: &BranchNode) -> &Node<P> {
-        &self.nodes[branch.right as usize]
+        &self.nodes[branch.right]
     }
 }
 
 struct TransitionBranch<P: ProblemType> {
-    id: u32,
-    split_with: u32,
+    id: usize,
+    split_with: u16,
     split_at: bf16,
     left: TransitionNode<P>,
     right: TransitionNode<P>,
@@ -284,23 +282,23 @@ struct TransitionBranch<P: ProblemType> {
 
 enum TransitionNode<P: ProblemType> {
     Leaf(P::Output),
-    Branch(u32),
+    Branch(usize),
 }
 
 impl<P: ProblemType> TransitionBranch<P> {
-    fn from_node(nodes: &[Node<P>], node: Node<P>, id: u32) -> Option<Self> {
+    fn from_node(nodes: &[Node<P>], node: Node<P>, id: usize) -> Option<Self> {
         // Only transform branch nodes by looking ahead to find out if the next
         // left/right nodes contain a prediction
         let Node::Branch(branch) = node else {
             return None;
         };
 
-        let left = match &nodes[branch.left as usize] {
+        let left = match &nodes[branch.left] {
             Node::Leaf(leaf) => TransitionNode::Leaf(leaf.prediction),
             Node::Branch(_) => TransitionNode::Branch(branch.left),
         };
 
-        let right = match &nodes[branch.right as usize] {
+        let right = match &nodes[branch.right] {
             Node::Leaf(leaf) => TransitionNode::Leaf(leaf.prediction),
             Node::Branch(_) => TransitionNode::Branch(branch.right),
         };
@@ -374,39 +372,39 @@ impl Forest<Classification> {
     }
 }
 
-// impl Forest<Regression> {
-//     /// Make a prediction based on input values (features)
-//     pub fn predict(&self, features: &[f32]) -> f32 {
-//         // Reserve space to store each tree's prediction
-//         let mut result = 0.0;
+impl Forest<Regression> {
+    /// Make a prediction based on input values (features)
+    pub fn predict(&self, features: &[bf16]) -> f32 {
+        // Reserve space to store each tree's prediction
+        let mut result = 0.0;
 
-//         // Descend into each tree to make a prediction
-//         for tree_id in 0..self.num_trees {
-//             // The tree root is stored at the tree index
-//             let mut node = &self.nodes[tree_id];
+        // Descend into each tree to make a prediction
+        for tree_id in 0..self.num_trees {
+            // The tree root is stored at the tree index
+            let mut node = &self.nodes[tree_id];
 
-//             let prediction = loop {
-//                 match node {
-//                     Node::Branch(b) => {
-//                         let test = features[b.split_with as usize] <= b.split_at;
-//                         if test {
-//                             node = self.next_left(b)
-//                         } else {
-//                             node = self.next_right(b)
-//                         }
-//                     }
-//                     Node::Leaf(l) => {
-//                         break l.prediction;
-//                     }
-//                 }
-//             };
+            let prediction = loop {
+                match node {
+                    Node::Branch(b) => {
+                        let test = features[b.split_with as usize] <= b.split_at;
+                        if test {
+                            node = self.next_left(b)
+                        } else {
+                            node = self.next_right(b)
+                        }
+                    }
+                    Node::Leaf(l) => {
+                        break l.prediction;
+                    }
+                }
+            };
 
-//             result += prediction;
-//         }
+            result += prediction;
+        }
 
-//         result / self.num_trees as f32
-//     }
-// }
+        result / self.num_trees as f32
+    }
+}
 
 impl fmt::Display for Forest<Classification> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -491,7 +489,10 @@ impl UpdatePointers for Classification {
         let (left_pred, left_val) = match branch.left {
             TransitionNode::Leaf(l) => (true, l),
             TransitionNode::Branch(b) => {
-                let next = nodes[b as usize].borrow().as_ref()?.id;
+                let next = nodes[b].borrow().as_ref()?.id;
+                let next = next.try_into().unwrap_or_else(|_| {
+                    panic!("Overflow: left branch ptr {next} does not fit into u16")
+                });
                 (false, next)
             }
         };
@@ -499,64 +500,62 @@ impl UpdatePointers for Classification {
         let (right_pred, right_val) = match branch.right {
             TransitionNode::Leaf(l) => (true, l),
             TransitionNode::Branch(b) => {
-                let next = nodes[b as usize].borrow().as_ref()?.id;
+                let next = nodes[b].borrow().as_ref()?.id;
+                let next = next.try_into().unwrap_or_else(|_| {
+                    panic!("Overflow: right branch ptr {next} does not fit into u16")
+                });
                 (false, next)
             }
         };
 
         Some(embedded_rforest::forest::Branch::new(
-            branch
-                .split_with
-                .try_into()
-                .expect("split_with does not fit into u16"),
+            branch.split_with,
             branch.split_at,
-            NodePointer::new_ptr(
-                left_val
-                    .try_into()
-                    .expect("left branch does not fit in u16"),
-            ),
-            NodePointer::new_ptr(
-                right_val
-                    .try_into()
-                    .expect("right branch does not fit into u16"),
-            ),
+            NodePointer::new_ptr(left_val),
+            NodePointer::new_ptr(right_val),
             left_pred,
             right_pred,
         ))
     }
 }
 
-// impl UpdatePointers for Regression {
-//     fn update_pointers(
-//         nodes: &[RefCell<Option<TransitionBranch<Self>>>],
-//         branch: &RefCell<Option<TransitionBranch<Self>>>,
-//     ) -> Option<embedded_rforest::forest::Branch> {
-//         let branch = branch.borrow();
-//         let branch = branch.as_ref()?;
+impl UpdatePointers for Regression {
+    fn update_pointers(
+        nodes: &[RefCell<Option<TransitionBranch<Self>>>],
+        branch: &RefCell<Option<TransitionBranch<Self>>>,
+    ) -> Option<embedded_rforest::forest::Branch> {
+        let branch = branch.borrow();
+        let branch = branch.as_ref()?;
 
-//         let (left_pred, left_ptr) = match branch.left {
-//             TransitionNode::Leaf(l) => (true, NodePointer::new_f32(l)),
-//             TransitionNode::Branch(b) => {
-//                 let next = nodes[b as usize].borrow().as_ref()?.id;
-//                 (false, NodePointer::new_ptr(next))
-//             }
-//         };
+        let (left_pred, left_ptr) = match branch.left {
+            TransitionNode::Leaf(l) => (true, NodePointer::new_bf16(bf16::from_f32(l))),
+            TransitionNode::Branch(b) => {
+                let next = nodes[b].borrow().as_ref()?.id;
+                let next = next.try_into().unwrap_or_else(|_| {
+                    panic!("Overflow: left branch ptr {next} does not fit into u16")
+                });
+                (false, NodePointer::new_ptr(next))
+            }
+        };
 
-//         let (right_pred, right_ptr) = match branch.right {
-//             TransitionNode::Leaf(l) => (true, NodePointer::new_f32(l)),
-//             TransitionNode::Branch(b) => {
-//                 let next = nodes[b as usize].borrow().as_ref()?.id;
-//                 (false, NodePointer::new_ptr(next))
-//             }
-//         };
+        let (right_pred, right_ptr) = match branch.right {
+            TransitionNode::Leaf(l) => (true, NodePointer::new_bf16(bf16::from_f32(l))),
+            TransitionNode::Branch(b) => {
+                let next = nodes[b].borrow().as_ref()?.id;
+                let next = next.try_into().unwrap_or_else(|_| {
+                    panic!("Overflow: right branch ptr {next} does not fit into u16")
+                });
+                (false, NodePointer::new_ptr(next))
+            }
+        };
 
-//         Some(embedded_rforest::forest::Branch::new(
-//             branch.split_with,
-//             branch.split_at,
-//             left_ptr,
-//             right_ptr,
-//             left_pred,
-//             right_pred,
-//         ))
-//     }
-// }
+        Some(embedded_rforest::forest::Branch::new(
+            branch.split_with,
+            branch.split_at,
+            left_ptr,
+            right_ptr,
+            left_pred,
+            right_pred,
+        ))
+    }
+}

@@ -5,11 +5,9 @@ use clap::{Parser, ValueEnum};
 use color_eyre::Result;
 use color_eyre::eyre::{Context, eyre};
 
-use embedded_rforest::forest::{Classification, OptimizedForest, Regression};
+use embedded_rforest::forest::{Classification, OptimizedForest};
 use forest_optimizer::forest::{Forest, Node};
-use forest_optimizer::serialized_forest::{
-    SerializedClassificationNode, SerializedForest, SerializedRegressionNode,
-};
+use forest_optimizer::serialized_forest::{SerializedClassificationNode, SerializedForest};
 
 /// Modes for the application
 #[derive(Debug, Clone, ValueEnum)]
@@ -90,7 +88,7 @@ fn analyze_classification(input: impl AsRef<Path>, print: bool) -> Result<()> {
 
     let serialized = optimized.to_bytes();
     let ptr = serialized.as_ptr();
-    assert!(ptr as usize % align_of::<OptimizedForest<Classification>>() == 0);
+    assert!((ptr as usize).is_multiple_of(align_of::<OptimizedForest<Classification>>()));
 
     println!(
         "--- Optimized forest ---\nTotal length: {} | Branches: {} , leaves: {} | Size: {}\n--------------------------\n\n",

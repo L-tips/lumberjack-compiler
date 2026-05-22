@@ -41,14 +41,14 @@ impl Classification {
 }
 
 impl ProblemType for Classification {
-    type Output = u32;
+    type Output = u16;
     const HAS_TARGETS: bool = true;
 }
 
 pub struct Regression;
 
 impl ProblemType for Regression {
-    type Output = f32;
+    type Output = bf16;
     const HAS_TARGETS: bool = false;
 }
 
@@ -92,7 +92,7 @@ impl Debug for Flags {
 }
 
 #[derive(Debug, Clone, IntoBytes, KnownLayout, Immutable, FromBytes)]
-#[repr(C, align(4))]
+#[repr(C, align(8))]
 pub struct Branch {
     left: NodePointer,
     right: NodePointer,
@@ -296,39 +296,39 @@ impl<'data> OptimizedForest<'data, Regression> {
     }
 }
 
-// impl Predict for OptimizedForest<'_, Regression> {
-//     type ProblemType = Regression;
+impl Predict for OptimizedForest<'_, Regression> {
+    type ProblemType = Regression;
 
-//     #[inline(never)]
-//     fn predict(&self, features: &[f32]) -> f32 {
-//         let mut result = 0.0;
+    #[inline(never)]
+    fn predict(&self, features: &[bf16]) -> <Self::ProblemType as ProblemType>::Output {
+        let mut result = 0.0;
 
-//         for tree_id in 0..self.num_trees.get() {
-//             let mut node = &self.nodes[tree_id as usize];
+        for tree_id in 0..self.num_trees.get() {
+            let mut node = &self.nodes[tree_id as usize];
 
-//             let prediction = loop {
-//                 let test = features[node.split_with() as usize] <= node.split_at();
+            let prediction = loop {
+                let test = features[node.split_with() as usize] <= node.split_at();
 
-//                 if test {
-//                     if node.flags.left_prediction() {
-//                         break node.left_ptr().as_f32();
-//                     } else {
-//                         node = self.next_left(node);
-//                     }
-//                 } else if node.flags.right_prediction() {
-//                     break node.right_ptr().as_f32();
-//                 } else {
-//                     node = self.next_right(node);
-//                 }
-//             };
+                if test {
+                    if node.flags.left_prediction() {
+                        break node.left_ptr().as_bf16();
+                    } else {
+                        node = self.next_left(node);
+                    }
+                } else if node.flags.right_prediction() {
+                    break node.right_ptr().as_bf16();
+                } else {
+                    node = self.next_right(node);
+                }
+            };
 
-//             // Register the vote for this tree's prediction
-//             result += prediction;
-//         }
+            // Register the vote for this tree's prediction
+            result += prediction.to_f32();
+        }
 
-//         result / self.num_trees.get() as f32
-//     }
-// }
+        bf16::from_f32(result / self.num_trees.get() as f32)
+    }
+}
 
 impl<P: ProblemType> fmt::Display for OptimizedForest<'_, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

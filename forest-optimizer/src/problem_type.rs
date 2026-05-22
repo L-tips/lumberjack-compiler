@@ -3,7 +3,7 @@ use std::{
     fmt::{Debug, Display},
 };
 
-pub type Map = HashMap<String, u32>;
+pub type Map = HashMap<String, u16>;
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum PredictionType {
@@ -41,7 +41,7 @@ impl Classification {
 }
 
 impl ProblemType for Classification {
-    type Output = u32;
+    type Output = u16;
     type OptimizedType = embedded_rforest::forest::Classification;
 
     const TYPE: PredictionType = PredictionType::Classification;

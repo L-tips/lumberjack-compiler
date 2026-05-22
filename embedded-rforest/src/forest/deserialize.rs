@@ -88,7 +88,10 @@ impl<'a, P: ProblemType> OptimizedForest<'a, P> {
             // Get start of node slice and skip padding (2 bytes)
             let header_len = size_of::<u32>() + size_of::<u8>() * 2 + 2;
             let slice_size = buffer.len() - header_len;
-            assert_eq!(slice_size % size_of::<Branch>(), 0);
+
+            if !slice_size.is_multiple_of(size_of::<Branch>()) {
+                return Err(Error::MalformedForest);
+            }
 
             let slice_len = slice_size / size_of::<Branch>();
             let slice_ptr = (base_ptr.byte_add(header_len)) as *const Branch;

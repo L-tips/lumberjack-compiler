@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use half::bf16;
+
 /// Datapoints and forest generated using the `iris` R sample dataset
 #[derive(serde::Deserialize, Debug)]
 pub(crate) struct DataPoint {
@@ -19,8 +21,8 @@ pub(crate) struct DataPoint {
 }
 
 impl DataPoint {
-    pub fn transform_features(&self, feature_map: &HashMap<String, u32>) -> [f32; 5] {
-        let mut features = [0.0, 0.0, 0.0, 0.0, 0.0];
+    pub fn transform_features(&self, feature_map: &HashMap<String, u16>) -> [bf16; 5] {
+        let mut features = [bf16::ZERO; 5];
 
         let feats = [
             (self.alpha, "alpha"),
@@ -32,7 +34,7 @@ impl DataPoint {
 
         for feat in feats {
             let position = feature_map.get(feat.1).unwrap();
-            features[*position as usize] = feat.0;
+            features[*position as usize] = bf16::from_f32(feat.0);
         }
 
         features

@@ -4,11 +4,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, byteorder::little_e
 
 /// A specialized relative pointer for use with optimized trees.
 ///
-/// It contains an `u32`, and can hold up to 31 bits of data. The data is
-/// encoded in the follwing form:
-///
-/// * If the first bit is 1, the next node in the tree is a leaf.
-/// * If the first bit is 0, the next node in the tree is a branch.
+/// It can be interpreted either as a relative pointer or a [`bf16`], depending on context.
 #[repr(transparent)]
 #[derive(Clone, Copy, IntoBytes, KnownLayout, Immutable, FromBytes)]
 pub struct NodePointer(U16);
@@ -18,7 +14,7 @@ impl NodePointer {
         Self(U16::new(ptr))
     }
 
-    pub fn new_f32(float: bf16) -> Self {
+    pub fn new_bf16(float: bf16) -> Self {
         // let float = F32::new(float);
         Self(U16::from_bytes(float.to_le_bytes()))
     }
@@ -28,7 +24,7 @@ impl NodePointer {
         self.0.get()
     }
 
-    pub fn as_f32(&self) -> bf16 {
+    pub fn as_bf16(&self) -> bf16 {
         let bytes = self.0.to_bytes();
         bf16::from_le_bytes(bytes)
     }
@@ -41,7 +37,7 @@ impl fmt::Debug for NodePointer {
             "NodePointer: {{ bytes: {:?}, (as_u32: {}, as_f32: {}) }}",
             self.0.as_bytes(),
             self.as_ptr(),
-            self.as_f32()
+            self.as_bf16()
         )
     }
 }
@@ -53,7 +49,7 @@ impl fmt::Display for NodePointer {
             "NodePointer: {:?} (u32: {}, f32: {})",
             self.0.as_bytes(),
             self.as_ptr(),
-            self.as_f32()
+            self.as_bf16()
         )
     }
 }
