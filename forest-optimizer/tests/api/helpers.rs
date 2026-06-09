@@ -2,12 +2,12 @@ use std::path::Path;
 
 use color_eyre::Result;
 
+use forest_optimizer::csv_forest::CsvForest;
 use forest_optimizer::forest::Forest;
-use forest_optimizer::serialized_forest::{SerializedForest, SerializedNode};
 use serde::de::DeserializeOwned;
 
-pub fn get_forest<N: SerializedNode>(path: impl AsRef<Path>) -> Result<Forest<N::ProblemType>> {
-    let serialized = SerializedForest::<N>::read(path.as_ref())?;
+pub fn get_forest(path: impl AsRef<Path>) -> Result<Forest> {
+    let serialized = CsvForest::read(path.as_ref())?;
     Forest::from_serialized(serialized)
 }
 

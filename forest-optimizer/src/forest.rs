@@ -1,14 +1,15 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::{cell::RefCell, mem::ManuallyDrop};
 
 use color_eyre::Result;
-use embedded_rforest::ptr::NodePointer;
+use embedded_rforest::{forest::TreeHeader, ptr::NodePointer};
 use half::bf16;
+use tap::Tap;
 
 use crate::{
-    problem_type::{Classification, Map, ProblemType},
-    serialized_forest::{SerializedForest, SerializedNode},
+    csv_forest::CsvForest,
+    problem_type::{Classification, Map},
 };
 
 #[derive(Debug, Clone)]
@@ -29,18 +30,20 @@ impl fmt::Display for BranchNode {
     }
 }
 
+pub type PredictionOutput = u16;
+
 #[derive(Debug, PartialEq, Clone)]
-pub struct LeafNode<P: ProblemType> {
-    pub(super) prediction: P::Output,
+pub struct LeafNode {
+    pub(super) prediction: PredictionOutput,
 }
 
 #[derive(Debug, Clone)]
-pub enum Node<P: ProblemType> {
-    Leaf(LeafNode<P>),
+pub enum Node {
+    Leaf(LeafNode),
     Branch(BranchNode),
 }
 
-impl<P: ProblemType> Node<P> {
+impl Node {
     pub fn is_branch(&self) -> bool {
         matches!(self, Self::Branch(_))
     }
@@ -49,34 +52,42 @@ impl<P: ProblemType> Node<P> {
         matches!(self, Self::Leaf(_))
     }
 
-    pub fn take_leaf(&self) -> Option<&LeafNode<P>> {
+    pub fn as_branch(&self) -> Option<&BranchNode> {
+        match self {
+            Node::Branch(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    pub fn as_leaf(&self) -> Option<&LeafNode> {
         match self {
             Node::Leaf(l) => Some(l),
             _ => None,
         }
     }
 
-    /// Calculate by how much we need to offset a branch's left and right
-    /// pointers, given that the trees are getting disjoined from their root,
-    /// which is stored at the front of the forest.
-    pub fn offset(self, tree_sizes: &[usize], tree_index: usize) -> Self {
-        // The offset is the sum of the size of all preceding trees, up to the current
-        // one, plus the total number of trees in the forest (to make space for all root
-        // nodes to be in front)
-        let offset =
-            tree_sizes[..tree_index].iter().sum::<usize>() + tree_sizes.len() - (tree_index + 1);
+    // /// Calculate by how much we need to offset a branch's left and right
+    // /// pointers, given that the trees are getting disjoined from their root,
+    // /// which is stored at the front of the forest.
+    // pub fn offset(self, tree_sizes: &[usize], tree_index: usize) -> Self {
+    //     // The offset is the sum of the size of all preceding trees, up to the
+    // current     // one, plus the total number of trees in the forest (to make
+    // space for all root     // nodes to be in front)
+    //     let offset =
+    //         tree_sizes[..tree_index].iter().sum::<usize>() + tree_sizes.len() -
+    // (tree_index + 1);
 
-        if let Node::Branch(mut branch) = self {
-            branch.left += offset;
-            branch.right += offset;
-            Node::Branch(branch)
-        } else {
-            self
-        }
-    }
+    //     if let Node::Branch(mut branch) = self {
+    //         branch.left += offset;
+    //         branch.right += offset;
+    //         Node::Branch(branch)
+    //     } else {
+    //         self
+    //     }
+    // }
 }
 
-impl<P: ProblemType> fmt::Display for Node<P> {
+impl fmt::Display for Node {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Node::Leaf(leaf) => write!(f, "Leaf   | prediction: {}", leaf.prediction),
@@ -85,36 +96,38 @@ impl<P: ProblemType> fmt::Display for Node<P> {
     }
 }
 
-#[derive(Debug)]
-struct Tree<P: ProblemType> {
-    nodes: Vec<Node<P>>,
+#[derive(Debug, Clone)]
+struct Tree {
+    nodes: Vec<Node>,
 }
 
-impl<P: ProblemType> Tree<P> {
-    pub fn new(nodes: Vec<Node<P>>) -> Self {
+impl Tree {
+    pub fn new(nodes: Vec<Node>) -> Self {
         Self { nodes }
+    }
+
+    fn next_left(&self, branch: &BranchNode) -> &Node {
+        &self.nodes[branch.left]
+    }
+
+    fn next_right(&self, branch: &BranchNode) -> &Node {
+        &self.nodes[branch.right]
     }
 }
 
 /// An array-backed, non-optimized random forest model
 #[derive(Debug)]
-pub struct Forest<P: ProblemType> {
-    num_trees: usize,
-    nodes: Vec<Node<P>>,
-    problem: P,
+pub struct Forest {
+    trees: Vec<Tree>,
+    problem: Classification,
 }
 
-impl<P> Forest<P>
-where
-    P: ProblemType,
-{
+impl Forest {
     /// Convert a [`SerializedForest`] into a [`Forest`].
     ///
     /// In practice, this method flattens the nodes, putting all tree roots in
     /// front of the array.
-    pub fn from_serialized<N: SerializedNode<ProblemType = P>>(
-        serialized: SerializedForest<N>,
-    ) -> Result<Self> {
+    pub fn from_serialized(serialized: CsvForest) -> Result<Self> {
         let problem = serialized.problem();
 
         // Find all nodes which have an index of 1. These are our tree roots.
@@ -167,153 +180,156 @@ where
             trees.push(Tree::new(tree_nodes));
         }
 
-        // Collect the size of each tree in a vector
-        let tree_sizes = trees.iter().map(|t| t.nodes.len()).collect::<Vec<_>>();
-
-        // forest_nodes will store the flattened collection of all nodes in this forest
-        let mut forest_nodes = Vec::with_capacity(tree_sizes.iter().sum());
-
-        // Combine all trees into a flat forest structure
-        // Start by adding the root of each tree to the beginning of the array
-        for (i, tree) in trees.iter().enumerate() {
-            let node = tree.nodes[0].clone().offset(&tree_sizes, i);
-            forest_nodes.push(node);
-        }
-
-        // Then add the rest of the nodes
-        for (i, tree) in trees.into_iter().enumerate() {
-            // Skipping the root node, as it is already inserted at the start of the forest
-            for node in tree.nodes.into_iter().skip(1) {
-                forest_nodes.push(node.offset(&tree_sizes, i));
-            }
-        }
-
-        for (i, node) in forest_nodes.iter().enumerate() {
-            // Verify that our forest size fits in an u32
-
-            // Ensure that every node only ever branches to another node further down the
-            // vec
-            if let Node::Branch(b) = node {
-                assert!(b.left > i && b.right > i);
-            }
-        }
-
         Ok(Self {
-            num_trees: tree_sizes.len(),
-            nodes: forest_nodes,
+            trees,
             problem: serialized.problem().clone(),
         })
     }
 
-    /// Turn this [`Forest`] into an [`OptimizedForest`].
-    #[expect(private_bounds)]
-    pub fn optimize_nodes(&self) -> Vec<embedded_rforest::forest::Branch>
-    where
-        P: UpdatePointers,
-    {
-        // Start by collecing branch indices, incrementing the branch index only if the
-        // node is a branch.
-        let mut branch_idx = 0;
-        let nodes = self
-            .nodes
-            .clone()
-            .into_iter()
-            .map(|n| {
-                if n.is_branch() {
-                    branch_idx += 1;
+    /// Turn this [`Forest`] into an
+    /// [`OptimizedForest`](embedded_rforest::forest::OptimizedForest).
+    pub fn optimize_nodes(&self) -> Vec<embedded_rforest::forest::Node> {
+        #[derive(Debug)]
+        enum Branch {
+            Ptr(usize),
+            Prediction(u16),
+        }
+
+        /// Transitive data structure keeping track of a node's parent
+        enum LinkedNode {
+            Header {
+                child_id: usize,
+            },
+            Padding,
+            Branch {
+                // node: Node
+                id: usize,
+                parent: usize,
+                left_child: Branch,
+                right_child: Branch,
+            },
+        }
+
+        impl std::fmt::Debug for LinkedNode {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    LinkedNode::Header { child_id: child } => write!(f, "Header, child: {child}"),
+                    LinkedNode::Padding => write!(f, "Padding"),
+                    LinkedNode::Branch {
+                        id,
+                        parent,
+                        left_child,
+                        right_child,
+                    } => f
+                        .debug_struct("LinkedNode Branch")
+                        .field("id", id)
+                        .field("parent", parent)
+                        .field("left_child", left_child)
+                        .field("right_child", right_child)
+                        .finish(),
                 }
-                RefCell::new(TransitionBranch::from_node(&self.nodes, n, branch_idx - 1))
-            })
-            .collect::<Vec<_>>();
-
-        // Descend the tree, replacing each decision with an optimized node pointer.
-        let nodes = nodes
-            .iter()
-            .map(|n| P::update_pointers(&nodes, n))
-            .filter_map(|mut n| n.take())
-            .collect::<Vec<_>>();
-
-        // Sanity check: since each tree can be represented as a DAG, we check that no
-        // node points backwards in the tree, leading to potential circular structures.
-        for (i, n) in nodes.iter().enumerate() {
-            if !n.flags().left_prediction() {
-                assert!(n.left_ptr().as_ptr() as usize > i);
-            }
-            if !n.flags().right_prediction() {
-                assert!(n.right_ptr().as_ptr() as usize > i);
             }
         }
 
-        nodes
-    }
+        // Sort trees by length so that the longest ones end up at the end. If HW is
+        // using multiple tree cells, the longer trees have a higher likelihood to end
+        // up in a cell that will have fewer trees than its counterparts, improving the
+        // average case prediction time.
+        let trees = self
+            .trees
+            .clone()
+            .tap_mut(|v| v.sort_by_key(|t| t.nodes.len()));
 
-    pub fn nodes(&self) -> &[Node<P>] {
-        &self.nodes
+        for (tree_id, tree) in trees.iter().enumerate() {
+            // The vec containing the nodes which have been assigned
+            let mut placed_nodes = Vec::with_capacity(tree.nodes.len());
+
+            // Nodes that haven't been placed yet
+            let mut unplaced_nodes: HashMap<_, _> = tree.nodes.iter().enumerate().collect();
+
+            // Each tree starts with a header. We don't know the tree's length yet, so leave
+            // at 0 for now. We also always leave a node's worth of padding so
+            // that the first "real" node ends up on a 128-byte boundary. This is to
+            // optimize the model if the hardware is using a superscalar architecture.
+            placed_nodes.extend([LinkedNode::Header { child_id: 0 }, LinkedNode::Padding]);
+
+            while let Some((id, extracted_node)) = unplaced_nodes.pop_front() {
+                if let Some(n) = extracted_node.as_branch() {
+                    // If node is a branch, go hunting for their left and right
+                    // branches
+                    let Some(left) = unplaced_nodes.get(n.left) else {
+                        panic!("Node ID _ could not be found in tree {tree_id}");
+                    };
+
+                    let Some(right) = unplaced_nodes.get(n.right) else {
+                        panic!("Node ID _ could not be found in tree {tree_id}");
+                    };
+
+                    // TODO: shouldn't be pop_front_if, rather some extraction from the middle.
+                    // Maybe using a HashMap instead?
+                    let (left_child, right_child) = match (left, right) {
+                        (Node::Branch(_), Node::Branch(_)) => {
+                            (Branch::Ptr(n.left), Branch::Ptr(n.right))
+                        }
+                        (Node::Branch(_), Node::Leaf(_)) => {
+                            let right_leaf = unplaced_nodes.remove(n.right).unwrap();
+                            let right_leaf = right_leaf.as_leaf().unwrap();
+                            (
+                                Branch::Ptr(n.left),
+                                Branch::Prediction(right_leaf.prediction),
+                            )
+                        }
+                        (Node::Leaf(_), Node::Branch(_)) => {
+                            let left_leaf = unplaced_nodes.remove(n.left).unwrap();
+                            let left_leaf = left_leaf.as_leaf().unwrap();
+                            (
+                                Branch::Prediction(left_leaf.prediction),
+                                Branch::Ptr(n.right),
+                            )
+                        }
+                        (Node::Leaf(_), Node::Leaf(_)) => {
+                            let left_leaf = unplaced_nodes.remove(n.left).unwrap();
+                            let left_leaf = left_leaf.as_leaf().unwrap();
+                            let right_leaf = unplaced_nodes.remove(n.right).unwrap();
+                            let right_leaf = right_leaf.as_leaf().unwrap();
+
+                            (
+                                Branch::Prediction(left_leaf.prediction),
+                                Branch::Prediction(right_leaf.prediction),
+                            )
+                        }
+                    };
+
+                    let node_to_place = LinkedNode::Branch {
+                        id,
+                        parent: todo!(),
+                        left_child,
+                        right_child,
+                    };
+
+                    // TODO: place node
+                    // here
+                } else if let Some(n) = extracted_node.as_leaf() {
+                    panic!("Leaf node should have been extracted already");
+                } else {
+                    unreachable!()
+                }
+            }
+        }
+
+        todo!()
     }
 
     pub fn num_trees(&self) -> usize {
-        self.num_trees
+        self.trees.len()
     }
 
     pub fn num_features(&self) -> usize {
         self.problem.features().len()
     }
-
-    pub fn features(&self) -> &Map {
-        self.problem.features()
-    }
-
-    fn next_left(&self, branch: &BranchNode) -> &Node<P> {
-        &self.nodes[branch.left]
-    }
-
-    fn next_right(&self, branch: &BranchNode) -> &Node<P> {
-        &self.nodes[branch.right]
-    }
 }
 
-struct TransitionBranch<P: ProblemType> {
-    id: usize,
-    split_with: u16,
-    split_at: bf16,
-    left: TransitionNode<P>,
-    right: TransitionNode<P>,
-}
-
-enum TransitionNode<P: ProblemType> {
-    Leaf(P::Output),
-    Branch(usize),
-}
-
-impl<P: ProblemType> TransitionBranch<P> {
-    fn from_node(nodes: &[Node<P>], node: Node<P>, id: usize) -> Option<Self> {
-        // Only transform branch nodes by looking ahead to find out if the next
-        // left/right nodes contain a prediction
-        let Node::Branch(branch) = node else {
-            return None;
-        };
-
-        let left = match &nodes[branch.left] {
-            Node::Leaf(leaf) => TransitionNode::Leaf(leaf.prediction),
-            Node::Branch(_) => TransitionNode::Branch(branch.left),
-        };
-
-        let right = match &nodes[branch.right] {
-            Node::Leaf(leaf) => TransitionNode::Leaf(leaf.prediction),
-            Node::Branch(_) => TransitionNode::Branch(branch.right),
-        };
-
-        Some(TransitionBranch {
-            id,
-            split_with: branch.split_with,
-            split_at: branch.split_at,
-            left,
-            right,
-        })
-    }
-}
-
-impl Forest<Classification> {
+impl Forest {
     pub fn num_targets(&self) -> usize {
         self.problem.targets().len()
     }
@@ -322,24 +338,28 @@ impl Forest<Classification> {
         self.problem.targets()
     }
 
+    pub fn features(&self) -> &Map {
+        self.problem.features()
+    }
+
     /// Make a prediction based on input values (features)
     pub fn predict(&self, features: &[bf16]) -> String {
         // Reserve space to store each tree's prediction
-        let mut results = Vec::with_capacity(self.num_trees);
+        let mut results = Vec::with_capacity(self.num_trees());
 
         // Descend into each tree to make a prediction
-        for tree_id in 0..self.num_trees {
-            // The tree root is stored at the tree index
-            let mut node = &self.nodes[tree_id];
+        for tree in &self.trees {
+            // Tree root
+            let mut node = &tree.nodes[0];
 
             let prediction = loop {
                 match node {
                     Node::Branch(b) => {
                         let test = features[b.split_with as usize] <= b.split_at;
                         if test {
-                            node = self.next_left(b)
+                            node = tree.next_left(b)
                         } else {
-                            node = self.next_right(b)
+                            node = tree.next_right(b)
                         }
                     }
                     Node::Leaf(l) => {
@@ -372,19 +392,23 @@ impl Forest<Classification> {
     }
 }
 
-impl fmt::Display for Forest<Classification> {
+impl fmt::Display for Forest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,
             "Classification Forest: {} trees, size {}, {} features, {} targets\n------------",
-            self.num_trees,
-            self.nodes.len(),
+            self.num_trees(),
+            self.trees.iter().map(|t| t.nodes.len()).sum::<usize>(),
             self.problem.features().len(),
             self.problem.targets().len(),
         )?;
-        for (i, node) in self.nodes.iter().enumerate() {
-            writeln!(f, "\t{i}: {node}")?;
+        for (i, tree) in self.trees.iter().enumerate() {
+            println!("Tree {i}:");
+            for (j, node) in tree.nodes.iter().enumerate() {
+                writeln!(f, "\t{j}: {node}")?;
+            }
         }
+
         writeln!(f, "------------")?;
 
         let mut features_ordered = self.problem.features().iter().collect::<Vec<_>>();
@@ -406,53 +430,5 @@ impl fmt::Display for Forest<Classification> {
         writeln!(f, "------------")?;
 
         Ok(())
-    }
-}
-
-trait UpdatePointers: ProblemType {
-    fn update_pointers(
-        nodes: &[RefCell<Option<TransitionBranch<Self>>>],
-        branch: &RefCell<Option<TransitionBranch<Self>>>,
-    ) -> Option<embedded_rforest::forest::Branch>;
-}
-
-impl UpdatePointers for Classification {
-    fn update_pointers(
-        nodes: &[RefCell<Option<TransitionBranch<Self>>>],
-        branch: &RefCell<Option<TransitionBranch<Self>>>,
-    ) -> Option<embedded_rforest::forest::Branch> {
-        let branch = branch.borrow();
-        let branch = branch.as_ref()?;
-
-        let (left_pred, left_val) = match branch.left {
-            TransitionNode::Leaf(l) => (true, l),
-            TransitionNode::Branch(b) => {
-                let next = nodes[b].borrow().as_ref()?.id;
-                let next = next.try_into().unwrap_or_else(|_| {
-                    panic!("Overflow: left branch ptr {next} does not fit into u16")
-                });
-                (false, next)
-            }
-        };
-
-        let (right_pred, right_val) = match branch.right {
-            TransitionNode::Leaf(l) => (true, l),
-            TransitionNode::Branch(b) => {
-                let next = nodes[b].borrow().as_ref()?.id;
-                let next = next.try_into().unwrap_or_else(|_| {
-                    panic!("Overflow: right branch ptr {next} does not fit into u16")
-                });
-                (false, next)
-            }
-        };
-
-        Some(embedded_rforest::forest::Branch::new(
-            branch.split_with,
-            branch.split_at,
-            NodePointer::new_ptr(left_val),
-            NodePointer::new_ptr(right_val),
-            left_pred,
-            right_pred,
-        ))
     }
 }

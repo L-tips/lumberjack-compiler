@@ -1,15 +1,14 @@
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
-use embedded_rforest::forest::{Classification, OptimizedForest, Predict};
-use forest_optimizer::serialized_forest::SerializedClassificationNode;
+use embedded_rforest::forest::{Classification, OptimizedForest};
+use forest_optimizer::csv_forest::CsvNode;
 
 use crate::datasets::iris;
 use crate::helpers::{get_forest, get_test_data};
 
 #[test]
 fn verify_regular_forest_accuracy_iris_800_trees() -> Result<()> {
-    let forest =
-        get_forest::<SerializedClassificationNode>("./tests/test-forests/forest_iris_800.csv")?;
+    let forest = get_forest::<CsvNode>("./tests/test-forests/forest_iris_800.csv")?;
     let test_data: Vec<iris::DataPoint> = get_test_data("./tests/test-data/iris.csv")?;
 
     for data_point in test_data {
@@ -23,11 +22,10 @@ fn verify_regular_forest_accuracy_iris_800_trees() -> Result<()> {
 
 #[test]
 fn verify_optimized_forest_accuracy_iris_880_trees() -> Result<()> {
-    let forest =
-        get_forest::<SerializedClassificationNode>("./tests/test-forests/forest_iris_800.csv")?;
+    let forest = get_forest("./tests/test-forests/forest_iris_800.csv")?;
 
     let nodes = forest.optimize_nodes();
-    let optimized = OptimizedForest::<Classification>::new(
+    let optimized = OptimizedForest::new(
         forest.num_trees().try_into().unwrap(),
         &nodes,
         forest.num_features().try_into().unwrap(),

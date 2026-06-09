@@ -7,4 +7,6 @@ pub mod ptr;
 pub enum Error {
     WrongProblemType,
     MalformedForest,
+    NoTargets,
+    NoFeatures,
 }

@@ -1,39 +1,20 @@
 use crate::forest::{BranchNode, LeafNode, Node};
-use crate::problem_type::{Classification, Map, PredictionType, ProblemType};
-use crate::typelevel::private::Sealed;
+use crate::problem_type::{Classification, Map};
 use std::collections::hash_map::Entry;
 use std::fmt::Debug;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::{fs, io};
 
 use color_eyre::Result;
-use color_eyre::eyre::{Context, ContextCompat, OptionExt, eyre};
+use color_eyre::eyre::{OptionExt, eyre};
 use half::bf16;
 use serde::{Deserialize, Deserializer};
 
 pub trait NodeType {}
 
-pub trait SerializedNode: Sealed + Clone {
-    type ProblemType: ProblemType;
-
-    fn deserialize<R: io::Read>(
-        problem: &mut Self::ProblemType,
-        rdr: &mut csv::Reader<R>,
-    ) -> Result<Vec<Self>>;
-
-    /// Turn a serialized node into a [`Node`]. This function also
-    /// renormalizes indices to use 0-indexing, and converts feature and target
-    /// names to their indices.
-    fn normalize(self, problem: &Self::ProblemType) -> Result<Node<Self::ProblemType>>;
-
-    fn node_idx(&self) -> usize;
-    fn tree_idx(&self) -> usize;
-}
-
 /// A single node of a [`SerializedForest`] in classification mode
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct SerializedClassificationNode {
+pub struct CsvNode {
     /// Tree index. 1-indexed.
     pub tree_idx: usize,
     /// Node index. 1-indexed.
@@ -58,7 +39,7 @@ pub struct SerializedClassificationNode {
     pub prediction: Option<String>,
 }
 
-impl SerializedClassificationNode {
+impl CsvNode {
     /// Find the feature ID of this node's split variable
     pub fn feature_id(&self, features_map: &Map) -> Option<u16> {
         features_map.get(self.split_on.as_ref()?).copied()
@@ -68,15 +49,9 @@ impl SerializedClassificationNode {
     pub fn target_id(&self, targets_map: &Map) -> Option<u16> {
         targets_map.get(self.prediction.as_ref()?).copied()
     }
-}
-
-impl Sealed for SerializedClassificationNode {}
-
-impl SerializedNode for SerializedClassificationNode {
-    type ProblemType = Classification;
 
     fn deserialize<R: io::Read>(
-        problem: &mut Self::ProblemType,
+        problem: &mut Classification,
         rdr: &mut csv::Reader<R>,
     ) -> Result<Vec<Self>> {
         let mut feat_count = 0;
@@ -85,7 +60,7 @@ impl SerializedNode for SerializedClassificationNode {
         let mut nodes = Vec::new();
 
         for result in rdr.deserialize() {
-            let record: SerializedClassificationNode = result?;
+            let record: CsvNode = result?;
 
             if let Some(feat) = &record.split_on {
                 assert_ne!(record.left, 0, "Node doesn't have a left daughter");
@@ -114,7 +89,7 @@ impl SerializedNode for SerializedClassificationNode {
         Ok(nodes)
     }
 
-    fn normalize(self, problem: &Self::ProblemType) -> Result<Node<Self::ProblemType>> {
+    pub fn normalize(self, problem: &Classification) -> Result<Node> {
         if self.split_on.is_some() {
             let branch = BranchNode {
                 split_with: self
@@ -138,23 +113,23 @@ impl SerializedNode for SerializedClassificationNode {
         Err(eyre!("Node is not a branch nor a leaf"))
     }
 
-    fn node_idx(&self) -> usize {
+    pub fn node_idx(&self) -> usize {
         self.node_idx
     }
 
-    fn tree_idx(&self) -> usize {
+    pub fn tree_idx(&self) -> usize {
         self.tree_idx
     }
 }
 
 #[derive(Debug)]
-pub struct SerializedForest<N: SerializedNode> {
-    nodes: Vec<N>,
-    problem: N::ProblemType,
+pub struct CsvForest {
+    nodes: Vec<CsvNode>,
+    problem: Classification,
 }
 
-impl<N: SerializedNode> SerializedForest<N> {
-    pub fn problem(&self) -> &N::ProblemType {
+impl CsvForest {
+    pub fn problem(&self) -> &Classification {
         &self.problem
     }
 
@@ -163,53 +138,25 @@ impl<N: SerializedNode> SerializedForest<N> {
         self.problem.features()
     }
 
-    pub fn nodes(&self) -> &[N] {
+    pub fn nodes(&self) -> &[CsvNode] {
         &self.nodes
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
-        Self::validate_header(&path)?;
-
         let rdr = fs::File::open(path.as_ref())?;
         let mut rdr = csv::ReaderBuilder::new()
             .comment(Some(b'#'))
             .from_reader(rdr);
 
-        let mut problem = N::ProblemType::default();
+        let mut problem = Classification::default();
 
-        let nodes = N::deserialize(&mut problem, &mut rdr)?;
+        let nodes = CsvNode::deserialize(&mut problem, &mut rdr)?;
 
-        Ok(SerializedForest { nodes, problem })
-    }
-
-    fn validate_header(path: impl AsRef<Path>) -> Result<()> {
-        let rdr = BufReader::new(fs::File::open(path.as_ref())?);
-
-        let header = rdr
-            .lines()
-            .take(1)
-            .collect::<Result<Vec<_>, _>>()?
-            .join(" ");
-
-        let header = header
-            .strip_prefix("#")
-            .context("Malformed forest definition file. First line doesn't start with '#'.")?;
-
-        let prediction_type = &serde_json::from_str::<serde_json::Value>(header)
-            .context("Malformed forest definition file. First line doesn't contain valid json")?["problem_type"];
-
-        let prediction_type: PredictionType = serde_json::from_value(prediction_type.clone())?;
-        if prediction_type != N::ProblemType::TYPE {
-            return Err(color_eyre::eyre::eyre!(
-                "You are trying to solve a regression problem with classification methods, or a classification problem with regression methods!"
-            ));
-        }
-
-        Ok(())
+        Ok(CsvForest { nodes, problem })
     }
 }
 
-impl SerializedForest<SerializedClassificationNode> {
+impl CsvForest {
     /// Get the targets of this forest
     pub fn targets(&self) -> &Map {
         self.problem.targets()

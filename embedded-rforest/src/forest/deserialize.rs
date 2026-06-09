@@ -1,10 +1,10 @@
-use core::{marker::PhantomData, num::NonZeroU8, ops::Deref};
+use core::{num::NonZeroU8, ops::Deref};
 
 use zerocopy::byteorder::little_endian::U32;
 
-use crate::Error;
+use crate::{Error, forest::LEN_PADDING};
 
-use super::{Branch, OptimizedForest, ProblemType};
+use super::{Branch, OptimizedForest};
 
 #[macro_export]
 macro_rules! static_storage {
@@ -43,7 +43,7 @@ impl<const N: usize> Deref for BackingStorage<N> {
     }
 }
 
-impl<'a, P: ProblemType> OptimizedForest<'a, P> {
+impl<'a> OptimizedForest<'a> {
     pub fn deserialize(buffer: &'a [u8]) -> Result<Self, Error> {
         let base_ptr = buffer.as_ptr();
 
@@ -54,7 +54,7 @@ impl<'a, P: ProblemType> OptimizedForest<'a, P> {
         let header_size = size_of::<u32>()  // num_trees
             + size_of::<u8>()               // num_features
             + size_of::<u8>()               // num_targets
-            + 2                             // padding
+            + LEN_PADDING                   // padding
             + size_of::<Branch>(); // At least 1 node
 
         // Ensure we at least have enough data for all fields
@@ -67,26 +67,15 @@ impl<'a, P: ProblemType> OptimizedForest<'a, P> {
 
             // Number of features (1 byte)
             let b_ptr = a_ptr.add(1) as *const u8;
-            let num_features = *b_ptr;
+            let num_features = NonZeroU8::new(*b_ptr).ok_or(Error::NoFeatures)?;
 
             // Number of targets (1 byte)
             let c_ptr = b_ptr.add(1);
-            let num_targets = if *c_ptr == 0 {
-                None
-            } else {
-                Some(NonZeroU8::new_unchecked(*c_ptr))
-            };
+            let num_targets = NonZeroU8::new(*c_ptr).ok_or(Error::NoTargets)?;
 
-            // Check that the forest is of the correct problem type according to the P type
-            // parameter
-            if (num_targets.is_some() && !P::HAS_TARGETS)
-                || (num_targets.is_none() && P::HAS_TARGETS)
-            {
-                return Err(Error::WrongProblemType);
-            }
-
-            // Get start of node slice and skip padding (2 bytes)
-            let header_len = size_of::<u32>() + size_of::<u8>() * 2 + 2;
+            // Get start of node slice and skip padding (6 bytes)
+            const PADDING: [u8; LEN_PADDING] = [0; LEN_PADDING];
+            let header_len = size_of::<u32>() + size_of::<u8>() * 2 + LEN_PADDING;
             let slice_size = buffer.len() - header_len;
 
             if !slice_size.is_multiple_of(size_of::<Branch>()) {
@@ -95,25 +84,26 @@ impl<'a, P: ProblemType> OptimizedForest<'a, P> {
 
             let slice_len = slice_size / size_of::<Branch>();
             let slice_ptr = (base_ptr.byte_add(header_len)) as *const Branch;
-            let branch_slice = core::slice::from_raw_parts(slice_ptr, slice_len);
 
-            for branch in branch_slice.iter() {
-                if !branch.flags.left_prediction() && (branch.left.as_ptr() as usize) >= slice_len {
-                    return Err(Error::MalformedForest);
-                }
-                if !branch.flags.right_prediction() && (branch.right.as_ptr() as usize) >= slice_len
-                {
-                    return Err(Error::MalformedForest);
-                };
-            }
+            let branch_slice = todo!();
+            // let branch_slice = core::slice::from_raw_parts(slice_ptr, slice_len);
+
+            // for branch in branch_slice.iter() {
+            //     if !branch.flags.left_prediction() && (branch.left.as_ptr() as usize) >= slice_len {
+            //         return Err(Error::MalformedForest);
+            //     }
+            //     if !branch.flags.right_prediction() && (branch.right.as_ptr() as usize) >= slice_len
+            //     {
+            //         return Err(Error::MalformedForest);
+            //     };
+            // }
 
             Ok(OptimizedForest {
                 num_trees,
                 num_features,
                 num_targets,
-                _padding: [0; 2],
+                _padding: PADDING,
                 nodes: branch_slice,
-                _problem: PhantomData,
             })
         }
     }

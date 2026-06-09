@@ -3,27 +3,30 @@ use color_eyre::{
     eyre::{Context, eyre},
 };
 
-use std::{fs::File, io::Write, path::Path};
+use std::{fs::File, io::Write, num::NonZeroU8, path::Path};
 
 use embedded_rforest::forest::{Classification, OptimizedForest};
 
-use crate::{
-    forest::Forest,
-    serialized_forest::{SerializedClassificationNode, SerializedForest},
-};
+use crate::{csv_forest::CsvForest, forest::Forest};
 
-pub fn write_classification(input: impl AsRef<Path>, output: impl AsRef<Path>) -> Result<()> {
+pub fn write_forest(input: impl AsRef<Path>, output: impl AsRef<Path>) -> Result<()> {
     // Read the input file
-    let serialized = SerializedForest::<SerializedClassificationNode>::read(input)
-        .context("Could not read forest definition file (CSV).")?;
+    let serialized =
+        CsvForest::read(input).context("Could not read forest definition file (CSV).")?;
     let forest = Forest::from_serialized(serialized)?;
 
     // Optimize the forest
     let nodes = forest.optimize_nodes();
-    let optimized = OptimizedForest::<Classification>::new(
+    let optimized = OptimizedForest::new(
         forest.num_trees().try_into().unwrap(),
         &nodes,
-        forest.num_features().try_into().unwrap(),
+        NonZeroU8::new(
+            forest
+                .num_features()
+                .try_into()
+                .expect("Features must fit into an u8."),
+        )
+        .expect("Number of features must be non-zero."),
         Classification::new(forest.num_targets().try_into().unwrap()).unwrap(),
     )
     .map_err(|_| eyre!("Malformed forest"))?;

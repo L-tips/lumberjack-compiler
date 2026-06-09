@@ -1,8 +1,8 @@
 use core::{
     fmt::{self, Debug},
-    marker::PhantomData,
     num::NonZeroU8,
 };
+use std::mem::ManuallyDrop;
 
 use half::bf16;
 use zerocopy::{
@@ -17,17 +17,7 @@ pub mod deserialize;
 #[cfg(feature = "std")]
 pub mod serialize;
 
-pub trait ProblemType {
-    type Output: Copy;
-    const HAS_TARGETS: bool;
-}
-
-pub trait Predict {
-    type ProblemType: ProblemType;
-
-    /// Make a prediction based on input values (features)
-    fn predict(&self, features: &[bf16]) -> <Self::ProblemType as ProblemType>::Output;
-}
+pub type PredictionOutput = u16;
 
 pub struct Classification {
     num_targets: NonZeroU8,
@@ -38,11 +28,6 @@ impl Classification {
         let num_targets = NonZeroU8::new(num_targets).ok_or(Error::MalformedForest)?;
         Ok(Self { num_targets })
     }
-}
-
-impl ProblemType for Classification {
-    type Output = u16;
-    const HAS_TARGETS: bool = true;
 }
 
 #[repr(transparent)]
@@ -81,6 +66,26 @@ impl Debug for Flags {
             self.right_prediction(),
             self.split_var_idx()
         )
+    }
+}
+
+#[derive(Debug, Clone, IntoBytes, KnownLayout, Immutable, FromBytes)]
+#[repr(C, align(8))]
+pub struct TreeHeader {
+    tree_len: u32,
+    first_node_idx: u32,
+}
+
+impl TreeHeader {
+    pub fn new(tree_len: u32, first_node_idx: u32) -> Self {
+        Self {
+            tree_len,
+            first_node_idx,
+        }
+    }
+
+    pub fn set_tree_len(&mut self, tree_len: u32) {
+        self.tree_len = tree_len;
     }
 }
 
@@ -137,6 +142,12 @@ impl Branch {
     }
 }
 
+pub union Node {
+    pub header: ManuallyDrop<TreeHeader>,
+    pub padding: u64,
+    pub branch: ManuallyDrop<Branch>,
+}
+
 impl fmt::Display for Branch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -150,22 +161,38 @@ impl fmt::Display for Branch {
     }
 }
 
+pub const LEN_PADDING: usize = 6;
+
 /// An array-backed, optimized random forest model
-#[repr(C, align(4))]
+#[repr(C, align(8))]
 #[derive(TryFromBytes, KnownLayout, Immutable)]
-pub struct OptimizedForest<'data, P: ProblemType> {
+pub struct OptimizedForest<'data> {
     num_trees: U32,
-    num_features: u8,
+    num_features: NonZeroU8,
     /// If num_targets is Some, we have a classification problem.
     /// Otherwise, we have a regression problem.
-    num_targets: Option<NonZeroU8>,
-    _padding: [u8; 2],
-    nodes: &'data [Branch],
-    _problem: PhantomData<P>,
+    num_targets: NonZeroU8,
+    _padding: [u8; LEN_PADDING],
+    nodes: &'data [Node],
 }
 
-impl<P: ProblemType> OptimizedForest<'_, P> {
-    pub fn nodes(&self) -> &[Branch] {
+impl<'data> OptimizedForest<'data> {
+    pub fn new(
+        num_trees: u32,
+        nodes: &'data [Node],
+        num_features: NonZeroU8,
+        problem: Classification,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            num_trees: U32::new(num_trees),
+            nodes,
+            num_features,
+            num_targets: problem.num_targets,
+            _padding: [0; 6],
+        })
+    }
+
+    pub fn nodes(&self) -> &[Node] {
         self.nodes
     }
 
@@ -173,134 +200,107 @@ impl<P: ProblemType> OptimizedForest<'_, P> {
         self.num_trees.get()
     }
 
-    pub fn num_features(&self) -> u8 {
+    pub fn num_targets(&self) -> NonZeroU8 {
+        self.num_targets
+    }
+
+    pub fn num_features(&self) -> NonZeroU8 {
         self.num_features
     }
 
     pub fn verify(&self) -> Result<(), Error> {
-        let nodes_len = self.nodes().len();
+        todo!()
+        // let nodes_len = self.nodes().len();
 
-        for (i, branch) in self.nodes().iter().enumerate() {
-            let is_left_prediction = branch.flags().left_prediction();
-            let is_right_prediction = branch.flags().right_prediction();
+        // for (i, branch) in self.nodes().iter().enumerate() {
+        //     let is_left_prediction = branch.flags().left_prediction();
+        //     let is_right_prediction = branch.flags().right_prediction();
 
-            let left_ptr = branch.left_ptr().as_ptr() as usize;
-            let right_ptr = branch.right_ptr().as_ptr() as usize;
+        //     let left_ptr = branch.left_ptr().as_ptr() as usize;
+        //     let right_ptr = branch.right_ptr().as_ptr() as usize;
 
-            if (!is_left_prediction && (left_ptr <= i || left_ptr >= nodes_len))
-                || (!is_right_prediction && (right_ptr <= i || right_ptr >= nodes_len))
-            {
-                #[cfg(feature = "std")]
-                println!(
-                    "Malformed forest: idx: {i}, nodes_len: {nodes_len}, is_left_prediction: {is_left_prediction}, is_right_prediction: {is_right_prediction}, left_ptr: {left_ptr}, right_ptr: {right_ptr}"
-                );
-                return Err(Error::MalformedForest);
-            }
-        }
+        //     if (!is_left_prediction && (left_ptr <= i || left_ptr >=
+        // nodes_len))         || (!is_right_prediction && (right_ptr <= i ||
+        // right_ptr >= nodes_len))     {
+        //         #[cfg(feature = "std")]
+        //         println!(
+        //             "Malformed forest: idx: {i}, nodes_len: {nodes_len}, is_left_prediction: {is_left_prediction}, is_right_prediction: {is_right_prediction}, left_ptr: {left_ptr}, right_ptr: {right_ptr}"
+        //         );
+        //         return Err(Error::MalformedForest);
+        //     }
+        // }
 
-        Ok(())
+        // Ok(())
     }
 
-    fn next_left(&self, branch: &Branch) -> &Branch {
-        &self.nodes[branch.left_ptr().as_ptr() as usize]
+    pub fn next_left(&self, branch: &Branch) -> &Branch {
+        todo!()
+        // &self.nodes[branch.left_ptr().as_ptr() as usize]
     }
 
-    fn next_right(&self, branch: &Branch) -> &Branch {
-        &self.nodes[branch.right_ptr().as_ptr() as usize]
+    pub fn next_right(&self, branch: &Branch) -> &Branch {
+        todo!()
+        // &self.nodes[branch.right_ptr().as_ptr() as usize]
     }
-}
-
-impl<'data> OptimizedForest<'data, Classification> {
-    pub fn new(
-        num_trees: u32,
-        nodes: &'data [Branch],
-        num_features: u8,
-        problem: Classification,
-    ) -> Result<Self, Error> {
-        Ok(Self {
-            num_trees: U32::new(num_trees),
-            nodes,
-            num_features,
-            num_targets: Some(problem.num_targets),
-            _padding: [0; 2],
-            _problem: PhantomData,
-        })
-    }
-
-    pub fn num_targets(&self) -> Option<NonZeroU8> {
-        self.num_targets
-    }
-}
-
-impl Predict for OptimizedForest<'_, Classification> {
-    type ProblemType = Classification;
 
     #[inline(never)]
-    fn predict(&self, features: &[bf16]) -> <Self::ProblemType as ProblemType>::Output {
-        let mut votes = [0; 255];
+    pub fn predict(&self, features: &[bf16]) -> PredictionOutput {
+        todo!()
+        // let mut votes = [0; 255];
 
-        for tree_id in 0..self.num_trees.get() {
-            let mut node = &self.nodes[tree_id as usize];
+        // for tree_id in 0..self.num_trees.get() {
+        //     let mut node = &self.nodes[tree_id as usize];
 
-            let prediction = loop {
-                let test = features[node.split_with() as usize] <= node.split_at();
+        //     let prediction = loop {
+        //         let test = features[node.split_with() as usize] <=
+        // node.split_at();
 
-                if test {
-                    if node.flags.left_prediction() {
-                        break node.left_ptr().as_ptr();
-                    } else {
-                        node = self.next_left(node);
-                    }
-                } else if node.flags.right_prediction() {
-                    break node.right_ptr().as_ptr();
-                } else {
-                    node = self.next_right(node);
-                }
-            };
+        //         if test {
+        //             if node.flags.left_prediction() {
+        //                 break node.left_ptr().as_ptr();
+        //             } else {
+        //                 node = self.next_left(node);
+        //             }
+        //         } else if node.flags.right_prediction() {
+        //             break node.right_ptr().as_ptr();
+        //         } else {
+        //             node = self.next_right(node);
+        //         }
+        //     };
 
-            // Register the vote for this tree's prediction
-            let vote = votes
-                .get_mut(prediction as usize)
-                .expect("Not enough space for this class");
-            *vote += 1;
-        }
+        //     // Register the vote for this tree's prediction
+        //     let vote = votes
+        //         .get_mut(prediction as usize)
+        //         .expect("Not enough space for this class");
+        //     *vote += 1;
+        // }
 
-        votes
-            .into_iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| a.cmp(b))
-            .unwrap()
-            .0
-            .try_into()
-            .unwrap()
+        // votes
+        //     .into_iter()
+        //     .enumerate()
+        //     .max_by(|(_, a), (_, b)| a.cmp(b))
+        //     .unwrap()
+        //     .0
+        //     .try_into()
+        //     .unwrap()
     }
 }
 
-impl<P: ProblemType> fmt::Display for OptimizedForest<'_, P> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(tgts) = self.num_targets {
-            writeln!(
-                f,
-                "OPTIMIZED CLASSIFICATION Forest: {} trees, size {}, {} features, {} targets\n------------",
-                self.num_trees,
-                self.nodes.len(),
-                self.num_features,
-                tgts
-            )?;
-        } else {
-            writeln!(
-                f,
-                "OPTIMIZED REGRESSION Forest: {} trees, size {}, {} features\n------------",
-                self.num_trees,
-                self.nodes.len(),
-                self.num_features,
-            )?;
-        }
+// impl fmt::Display for OptimizedForest<'_> {
+// fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         writeln!(
+//             f,
+//             "OPTIMIZED CLASSIFICATION Forest: {} trees, size {}, {} features,
+// {} targets\n------------",             self.num_trees,
+//             self.nodes.len(),
+//             self.num_features,
+//             tgts
+//         )?;
+//     }
 
-        for (i, node) in self.nodes.iter().enumerate() {
-            writeln!(f, "\t{i}: {node}")?;
-        }
-        writeln!(f, "------------")?;
-        Ok(())
-    }
-}
+//     for (i, node) in self.nodes.iter().enumerate() {
+//         writeln!(f, "\t{i}: {node}")?;
+//     }
+//     writeln!(f, "------------")?;
+//     Ok(())
+// }

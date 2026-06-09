@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
 use color_eyre::Result;
-use forest_optimizer::write_forest::write_classification;
+use forest_optimizer::write_forest::write_forest;
 
 use std::path::PathBuf;
 
@@ -27,5 +27,5 @@ fn main() -> Result<()> {
     color_eyre::install()?;
     let args = Cli::parse();
 
-    write_classification(args.input, args.output)
+    write_forest(args.input, args.output)
 }
