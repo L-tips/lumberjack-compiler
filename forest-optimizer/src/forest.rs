@@ -7,7 +7,7 @@ use embedded_rforest::ptr::NodePointer;
 use half::bf16;
 
 use crate::{
-    problem_type::{Classification, Map, ProblemType, Regression},
+    problem_type::{Classification, Map, ProblemType},
     serialized_forest::{SerializedForest, SerializedNode},
 };
 
@@ -372,40 +372,6 @@ impl Forest<Classification> {
     }
 }
 
-impl Forest<Regression> {
-    /// Make a prediction based on input values (features)
-    pub fn predict(&self, features: &[bf16]) -> f32 {
-        // Reserve space to store each tree's prediction
-        let mut result = 0.0;
-
-        // Descend into each tree to make a prediction
-        for tree_id in 0..self.num_trees {
-            // The tree root is stored at the tree index
-            let mut node = &self.nodes[tree_id];
-
-            let prediction = loop {
-                match node {
-                    Node::Branch(b) => {
-                        let test = features[b.split_with as usize] <= b.split_at;
-                        if test {
-                            node = self.next_left(b)
-                        } else {
-                            node = self.next_right(b)
-                        }
-                    }
-                    Node::Leaf(l) => {
-                        break l.prediction;
-                    }
-                }
-            };
-
-            result += prediction;
-        }
-
-        result / self.num_trees as f32
-    }
-}
-
 impl fmt::Display for Forest<Classification> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
@@ -435,34 +401,6 @@ impl fmt::Display for Forest<Classification> {
         writeln!(f, "Targets: ")?;
         for t in targets_ordered.iter() {
             writeln!(f, "\t{}: {}", t.1, t.0)?;
-        }
-
-        writeln!(f, "------------")?;
-
-        Ok(())
-    }
-}
-
-impl fmt::Display for Forest<Regression> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
-            f,
-            "Regression Forest: {} trees, size {}, {} features\n------------",
-            self.num_trees,
-            self.nodes.len(),
-            self.problem.features().len(),
-        )?;
-        for (i, node) in self.nodes.iter().enumerate() {
-            writeln!(f, "\t{i}: {node}")?;
-        }
-        writeln!(f, "------------")?;
-
-        let mut features_ordered = self.problem.features().iter().collect::<Vec<_>>();
-        features_ordered.sort_by(|a, b| a.1.cmp(b.1));
-
-        writeln!(f, "Features: ")?;
-        for feat in features_ordered.iter() {
-            writeln!(f, "\t{}: {}", feat.1, feat.0)?;
         }
 
         writeln!(f, "------------")?;
@@ -513,47 +451,6 @@ impl UpdatePointers for Classification {
             branch.split_at,
             NodePointer::new_ptr(left_val),
             NodePointer::new_ptr(right_val),
-            left_pred,
-            right_pred,
-        ))
-    }
-}
-
-impl UpdatePointers for Regression {
-    fn update_pointers(
-        nodes: &[RefCell<Option<TransitionBranch<Self>>>],
-        branch: &RefCell<Option<TransitionBranch<Self>>>,
-    ) -> Option<embedded_rforest::forest::Branch> {
-        let branch = branch.borrow();
-        let branch = branch.as_ref()?;
-
-        let (left_pred, left_ptr) = match branch.left {
-            TransitionNode::Leaf(l) => (true, NodePointer::new_bf16(bf16::from_f32(l))),
-            TransitionNode::Branch(b) => {
-                let next = nodes[b].borrow().as_ref()?.id;
-                let next = next.try_into().unwrap_or_else(|_| {
-                    panic!("Overflow: left branch ptr {next} does not fit into u16")
-                });
-                (false, NodePointer::new_ptr(next))
-            }
-        };
-
-        let (right_pred, right_ptr) = match branch.right {
-            TransitionNode::Leaf(l) => (true, NodePointer::new_bf16(bf16::from_f32(l))),
-            TransitionNode::Branch(b) => {
-                let next = nodes[b].borrow().as_ref()?.id;
-                let next = next.try_into().unwrap_or_else(|_| {
-                    panic!("Overflow: right branch ptr {next} does not fit into u16")
-                });
-                (false, NodePointer::new_ptr(next))
-            }
-        };
-
-        Some(embedded_rforest::forest::Branch::new(
-            branch.split_with,
-            branch.split_at,
-            left_ptr,
-            right_ptr,
             left_pred,
             right_pred,
         ))

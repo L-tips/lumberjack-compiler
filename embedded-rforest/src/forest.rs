@@ -45,13 +45,6 @@ impl ProblemType for Classification {
     const HAS_TARGETS: bool = true;
 }
 
-pub struct Regression;
-
-impl ProblemType for Regression {
-    type Output = bf16;
-    const HAS_TARGETS: bool = false;
-}
-
 #[repr(transparent)]
 #[derive(IntoBytes, Clone, Copy, KnownLayout, Immutable, FromBytes)]
 pub struct Flags(U16);
@@ -280,53 +273,6 @@ impl Predict for OptimizedForest<'_, Classification> {
             .0
             .try_into()
             .unwrap()
-    }
-}
-
-impl<'data> OptimizedForest<'data, Regression> {
-    pub fn new(num_trees: u32, nodes: &'data [Branch], num_features: u8) -> Result<Self, Error> {
-        Ok(Self {
-            num_trees: U32::new(num_trees),
-            nodes,
-            num_features,
-            num_targets: None,
-            _padding: [0; 2],
-            _problem: PhantomData,
-        })
-    }
-}
-
-impl Predict for OptimizedForest<'_, Regression> {
-    type ProblemType = Regression;
-
-    #[inline(never)]
-    fn predict(&self, features: &[bf16]) -> <Self::ProblemType as ProblemType>::Output {
-        let mut result = 0.0;
-
-        for tree_id in 0..self.num_trees.get() {
-            let mut node = &self.nodes[tree_id as usize];
-
-            let prediction = loop {
-                let test = features[node.split_with() as usize] <= node.split_at();
-
-                if test {
-                    if node.flags.left_prediction() {
-                        break node.left_ptr().as_bf16();
-                    } else {
-                        node = self.next_left(node);
-                    }
-                } else if node.flags.right_prediction() {
-                    break node.right_ptr().as_bf16();
-                } else {
-                    node = self.next_right(node);
-                }
-            };
-
-            // Register the vote for this tree's prediction
-            result += prediction.to_f32();
-        }
-
-        bf16::from_f32(result / self.num_trees.get() as f32)
     }
 }
 

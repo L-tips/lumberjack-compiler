@@ -20,11 +20,3 @@ pub fn get_test_data<T: DeserializeOwned>(path: impl AsRef<Path>) -> Result<Vec<
 
     Ok(data)
 }
-
-pub fn assert_epsilon(left: f32, right: f32, epsilon: f32) {
-    println!(
-        "left: {left}, right: {right}, epsilon: {epsilon}, |left - right| = {}",
-        (left - right).abs()
-    );
-    assert!((left - right).abs() <= epsilon.abs());
-}

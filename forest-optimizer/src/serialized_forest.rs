@@ -1,5 +1,5 @@
 use crate::forest::{BranchNode, LeafNode, Node};
-use crate::problem_type::{Classification, Map, PredictionType, ProblemType, Regression};
+use crate::problem_type::{Classification, Map, PredictionType, ProblemType};
 use crate::typelevel::private::Sealed;
 use std::collections::hash_map::Entry;
 use std::fmt::Debug;
@@ -131,107 +131,6 @@ impl SerializedNode for SerializedClassificationNode {
                 prediction: self
                     .target_id(problem.targets())
                     .ok_or_eyre("Target ID missing")?,
-            };
-
-            return Ok(Node::Leaf(leaf));
-        }
-        Err(eyre!("Node is not a branch nor a leaf"))
-    }
-
-    fn node_idx(&self) -> usize {
-        self.node_idx
-    }
-
-    fn tree_idx(&self) -> usize {
-        self.tree_idx
-    }
-}
-
-/// A single node of a [`SerializedForest`] in regression mode
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct SerializedRegressionNode {
-    /// Tree index. 1-indexed.
-    pub tree_idx: usize,
-    /// Node index. 1-indexed.
-    pub node_idx: usize,
-    /// Pointer to left branch node
-    #[serde(rename = "left daughter")]
-    pub left: usize,
-    /// Pointer to right branch node
-    #[serde(rename = "right daughter")]
-    pub right: usize,
-    /// The variable on which to split
-    #[serde(rename = "split var", deserialize_with = "string_or_na")]
-    pub split_on: Option<String>,
-    /// The split point
-    #[serde(rename = "split point")]
-    pub split_at: f32,
-    /// The node status. A value of 1 represents a branch, and -1 represents a
-    /// prediction
-    pub status: i8,
-    /// The predicted variable
-    pub prediction: Option<f32>,
-}
-
-impl SerializedRegressionNode {
-    /// Find the feature ID of this node's split variable
-    pub fn feature_id(&self, features_map: &Map) -> Option<u16> {
-        features_map.get(self.split_on.as_ref()?).copied()
-    }
-
-    /// Find this node's prediction
-    pub fn target(&self) -> Option<f32> {
-        self.prediction
-    }
-}
-
-impl Sealed for SerializedRegressionNode {}
-
-impl SerializedNode for SerializedRegressionNode {
-    type ProblemType = Regression;
-
-    fn deserialize<R: io::Read>(
-        problem: &mut Self::ProblemType,
-        rdr: &mut csv::Reader<R>,
-    ) -> Result<Vec<Self>> {
-        let mut feat_count = 0;
-        let mut nodes = Vec::new();
-
-        for result in rdr.deserialize() {
-            let record: SerializedRegressionNode = result?;
-
-            if let Some(feat) = &record.split_on {
-                assert_ne!(record.left, 0, "Node doesn't have a left daughter");
-                assert_ne!(record.right, 0, "Node doesn't have a right daughter");
-
-                // Map all available features and assign an index to each
-                if let Entry::Vacant(e) = problem.features_mut().entry(feat.clone()) {
-                    e.insert(feat_count);
-                    feat_count += 1;
-                }
-            }
-
-            nodes.push(record);
-        }
-
-        Ok(nodes)
-    }
-
-    fn normalize(self, problem: &Self::ProblemType) -> Result<Node<Self::ProblemType>> {
-        if self.split_on.is_some() {
-            let branch = BranchNode {
-                split_with: self
-                    .feature_id(problem.features())
-                    .ok_or_eyre("Feature ID missing")?,
-                split_at: bf16::from_f32(self.split_at),
-                left: self.left - 1,
-                right: self.right - 1,
-            };
-
-            return Ok(Node::Branch(branch));
-        } else if self.prediction.is_some() {
-            let leaf = LeafNode {
-                prediction: self.prediction.ok_or_eyre("Prediction missing")?,
             };
 
             return Ok(Node::Leaf(leaf));

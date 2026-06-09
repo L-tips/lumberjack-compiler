@@ -54,23 +54,3 @@ impl ProblemType for Classification {
         &mut self.features
     }
 }
-
-#[derive(Default, Clone, Debug)]
-pub struct Regression {
-    features: Map,
-}
-
-impl ProblemType for Regression {
-    type Output = f32;
-    type OptimizedType = embedded_rforest::forest::Regression;
-
-    const TYPE: PredictionType = PredictionType::Regression;
-
-    fn features(&self) -> &Map {
-        &self.features
-    }
-
-    fn features_mut(&mut self) -> &mut Map {
-        &mut self.features
-    }
-}
