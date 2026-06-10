@@ -115,6 +115,16 @@ impl Tree {
     }
 }
 
+impl fmt::Display for Tree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, n) in self.nodes.iter().enumerate() {
+            writeln!(f, "\tNode {i}:\t{n}")?;
+        }
+
+        Ok(())
+    }
+}
+
 /// An array-backed, non-optimized random forest model
 #[derive(Debug)]
 pub struct Forest {
@@ -189,48 +199,6 @@ impl Forest {
     /// Turn this [`Forest`] into an
     /// [`OptimizedForest`](embedded_rforest::forest::OptimizedForest).
     pub fn optimize_nodes(&self) -> Vec<embedded_rforest::forest::Node> {
-        #[derive(Debug)]
-        enum Branch {
-            Ptr(usize),
-            Prediction(u16),
-        }
-
-        /// Transitive data structure keeping track of a node's parent
-        enum LinkedNode {
-            Header {
-                child_id: usize,
-            },
-            Padding,
-            Branch {
-                // node: Node
-                id: usize,
-                parent: usize,
-                left_child: Branch,
-                right_child: Branch,
-            },
-        }
-
-        impl std::fmt::Debug for LinkedNode {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                match self {
-                    LinkedNode::Header { child_id: child } => write!(f, "Header, child: {child}"),
-                    LinkedNode::Padding => write!(f, "Padding"),
-                    LinkedNode::Branch {
-                        id,
-                        parent,
-                        left_child,
-                        right_child,
-                    } => f
-                        .debug_struct("LinkedNode Branch")
-                        .field("id", id)
-                        .field("parent", parent)
-                        .field("left_child", left_child)
-                        .field("right_child", right_child)
-                        .finish(),
-                }
-            }
-        }
-
         // Sort trees by length so that the longest ones end up at the end. If HW is
         // using multiple tree cells, the longer trees have a higher likelihood to end
         // up in a cell that will have fewer trees than its counterparts, improving the
@@ -241,11 +209,14 @@ impl Forest {
             .tap_mut(|v| v.sort_by_key(|t| t.nodes.len()));
 
         for (tree_id, tree) in trees.iter().enumerate() {
-            // The vec containing the nodes which have been assigned
+            // The vec containing the nodes which have already been assigned
             let mut placed_nodes = Vec::with_capacity(tree.nodes.len());
 
             // Nodes that haven't been placed yet
-            let mut unplaced_nodes: HashMap<_, _> = tree.nodes.iter().enumerate().collect();
+            let mut waiting_nodes: VecDeque<_> = tree.nodes.iter().enumerate().collect();
+
+            // Keep a list of nodes that will be placed later for better optimization
+            let mut deferred_nodes: VecDeque<LinkedNode> = VecDeque::new();
 
             // Each tree starts with a header. We don't know the tree's length yet, so leave
             // at 0 for now. We also always leave a node's worth of padding so
@@ -253,69 +224,84 @@ impl Forest {
             // optimize the model if the hardware is using a superscalar architecture.
             placed_nodes.extend([LinkedNode::Header { child_id: 0 }, LinkedNode::Padding]);
 
-            while let Some((id, extracted_node)) = unplaced_nodes.pop_front() {
+            let mut parent_id = None;
+            let (mut id, mut extracted_node) = waiting_nodes.pop_front().unwrap();
+            loop {
                 if let Some(n) = extracted_node.as_branch() {
-                    // If node is a branch, go hunting for their left and right
-                    // branches
-                    let Some(left) = unplaced_nodes.get(n.left) else {
-                        panic!("Node ID _ could not be found in tree {tree_id}");
-                    };
+                    // println!("extracted node with ID {id}: {extracted_node}");
+                    // println!("unplaced_nodes: {unplaced_nodes:?}");
 
-                    let Some(right) = unplaced_nodes.get(n.right) else {
-                        panic!("Node ID _ could not be found in tree {tree_id}");
-                    };
+                    // Go hunting for left and right children
+                    let left_child = extract_branch_if_leaf(&mut waiting_nodes, n.left);
+                    let right_child = extract_branch_if_leaf(&mut waiting_nodes, n.right);
 
-                    // TODO: shouldn't be pop_front_if, rather some extraction from the middle.
-                    // Maybe using a HashMap instead?
-                    let (left_child, right_child) = match (left, right) {
-                        (Node::Branch(_), Node::Branch(_)) => {
-                            (Branch::Ptr(n.left), Branch::Ptr(n.right))
-                        }
-                        (Node::Branch(_), Node::Leaf(_)) => {
-                            let right_leaf = unplaced_nodes.remove(n.right).unwrap();
-                            let right_leaf = right_leaf.as_leaf().unwrap();
-                            (
-                                Branch::Ptr(n.left),
-                                Branch::Prediction(right_leaf.prediction),
-                            )
-                        }
-                        (Node::Leaf(_), Node::Branch(_)) => {
-                            let left_leaf = unplaced_nodes.remove(n.left).unwrap();
-                            let left_leaf = left_leaf.as_leaf().unwrap();
-                            (
-                                Branch::Prediction(left_leaf.prediction),
-                                Branch::Ptr(n.right),
-                            )
-                        }
-                        (Node::Leaf(_), Node::Leaf(_)) => {
-                            let left_leaf = unplaced_nodes.remove(n.left).unwrap();
-                            let left_leaf = left_leaf.as_leaf().unwrap();
-                            let right_leaf = unplaced_nodes.remove(n.right).unwrap();
-                            let right_leaf = right_leaf.as_leaf().unwrap();
-
-                            (
-                                Branch::Prediction(left_leaf.prediction),
-                                Branch::Prediction(right_leaf.prediction),
-                            )
-                        }
-                    };
+                    // println!(
+                    //     "Node ID {id}. left: {left_child:?}, right: {right_child:?}, parent:
+                    // {parent_id:?}" );
 
                     let node_to_place = LinkedNode::Branch {
                         id,
-                        parent: todo!(),
+                        parent_id,
                         left_child,
                         right_child,
+                        split_at: n.split_at,
+                        split_with: n.split_with,
                     };
 
-                    // TODO: place node
-                    // here
+                    // If node is a double prediction, avoid placing it at a 128b boundary where it
+                    // would be more optimal to place a node with at least one branch
+                    if matches!(left_child, Branch::Prediction(_))
+                        && matches!(right_child, Branch::Prediction(_))
+                        && placed_nodes.len().is_multiple_of(2)
+                    {
+                        deferred_nodes.push_back(node_to_place);
+                    } else {
+                        placed_nodes.push(node_to_place);
+                    }
+
+                    parent_id = Some(id);
+
+                    // println!("placed nodes: {placed_nodes:?}");
+
+                    // Previous node was 128-bit aligned. Add one of its children right next to it
+                    // to take advantage of the superscalar arch.
+                    if placed_nodes.len() % 2 == 1 {
+                        if let Branch::Ptr(l) = left_child {
+                            (id, extracted_node) = extract_branch(&mut waiting_nodes, l);
+                            continue;
+                        } else if let Branch::Ptr(r) = right_child {
+                            (id, extracted_node) = extract_branch(&mut waiting_nodes, r);
+                            continue;
+                        }
+                    }
+
+                    let Some((new_id, new_node)) = waiting_nodes.pop_front() else {
+                        break;
+                    };
+
+                    id = new_id;
+                    extracted_node = new_node;
                 } else if let Some(n) = extracted_node.as_leaf() {
                     panic!("Leaf node should have been extracted already");
                 } else {
                     unreachable!()
                 }
             }
+
+            // TODO: place padding where convenient
+            // TODO: place deferred nodes
+            // TODO: translate node IDs into indices and convert to
+            // embedded_rforest::forest::Node
+
+            println!("Tree {tree_id}:");
+            println!("{tree}");
+            println!("Optimized:");
+            for (idx, n) in placed_nodes.iter().enumerate() {
+                println!("({idx}) {n:?}");
+            }
         }
+
+        // TODO: edit tree header with tree length
 
         todo!()
     }
@@ -431,4 +417,78 @@ impl fmt::Display for Forest {
 
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Branch {
+    Ptr(usize),
+    Prediction(u16),
+}
+
+/// Transitive data structure keeping track of a node's parent
+enum LinkedNode {
+    Header {
+        child_id: usize,
+    },
+    Padding,
+    Branch {
+        // node: Node
+        id: usize,
+        split_with: u16,
+        split_at: bf16,
+        parent_id: Option<usize>,
+        left_child: Branch,
+        right_child: Branch,
+    },
+}
+
+impl std::fmt::Debug for LinkedNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LinkedNode::Header { child_id: child } => write!(f, "Header, child: {child}"),
+            LinkedNode::Padding => write!(f, "Padding"),
+            LinkedNode::Branch {
+                id,
+                split_with,
+                split_at,
+                parent_id: parent,
+                left_child,
+                right_child,
+            } => f
+                .debug_struct("LinkedNode Branch")
+                .field("id", id)
+                .field("parent", parent)
+                .field("left_child", left_child)
+                .field("right_child", right_child)
+                .field("split_with", split_with)
+                .field("split_at", split_at)
+                .finish(),
+        }
+    }
+}
+
+/// Extract the node from the queue if it's a leaf, otherwise leave it in.
+fn extract_branch_if_leaf(unplaced_nodes: &mut VecDeque<(usize, &Node)>, id: usize) -> Branch {
+    let node = unplaced_nodes
+        .iter()
+        .find(|(i, _)| *i == id)
+        .map(|(_, n)| *n)
+        .unwrap_or_else(|| panic!("Node ID {id} could not be found"));
+
+    match node {
+        Node::Leaf(l) => {
+            let pos = unplaced_nodes.iter().position(|(i, _)| *i == id).unwrap();
+            unplaced_nodes.remove(pos).unwrap();
+            Branch::Prediction(l.prediction)
+        }
+        Node::Branch(_) => Branch::Ptr(id),
+    }
+}
+
+fn extract_branch<'a>(
+    unplaced_nodes: &mut VecDeque<(usize, &'a Node)>,
+    id: usize,
+) -> (usize, &'a Node) {
+    let pos = unplaced_nodes.iter().position(|(i, _)| *i == id).unwrap();
+    unplaced_nodes.remove(pos).unwrap()
 }
