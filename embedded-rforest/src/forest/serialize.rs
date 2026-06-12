@@ -1,25 +1,25 @@
 use aligned_vec::AVec;
 use zerocopy::IntoBytes;
 
-use crate::forest::LEN_PADDING;
+use crate::forest::ALIGNMENT;
 
 use super::OptimizedForest;
 
 impl OptimizedForest<'_> {
     pub fn to_bytes(&self) -> AVec<u8> {
-        let mut bytes = AVec::<u8>::with_capacity(4, 8);
+        let mut bytes = AVec::<u8>::with_capacity(ALIGNMENT, 8);
 
         // Number of trees (4 bytes)
         bytes.extend_from_slice(self.num_trees.to_bytes().as_slice());
 
-        // Number of features (1 byte)
-        bytes.push(self.num_features().get());
+        // Number of features (2 bytes)
+        bytes.extend_from_slice(&self.num_features().to_bytes());
 
-        // Number of targets (1 byte)
-        bytes.push(self.num_targets().get());
+        // Number of targets (2 bytes)
+        bytes.extend_from_slice(&self.num_targets().to_bytes());
 
-        // Padding (2 bytes)
-        bytes.extend_from_slice(&[0; LEN_PADDING]);
+        // Padding
+        bytes.extend_from_slice(&0u64.to_le_bytes());
 
         // Performance: reserve some extra space in the vec for all our nodes
         bytes.reserve(size_of_val(self.nodes));

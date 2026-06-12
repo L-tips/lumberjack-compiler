@@ -1,9 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::{cell::RefCell, mem::ManuallyDrop};
+use std::mem::ManuallyDrop;
 
 use color_eyre::Result;
-use embedded_rforest::{forest::TreeHeader, ptr::NodePointer};
+use embedded_rforest::forest::TreeHeader;
 use half::bf16;
 use tap::Tap;
 
@@ -65,26 +65,6 @@ impl Node {
             _ => None,
         }
     }
-
-    // /// Calculate by how much we need to offset a branch's left and right
-    // /// pointers, given that the trees are getting disjoined from their root,
-    // /// which is stored at the front of the forest.
-    // pub fn offset(self, tree_sizes: &[usize], tree_index: usize) -> Self {
-    //     // The offset is the sum of the size of all preceding trees, up to the
-    // current     // one, plus the total number of trees in the forest (to make
-    // space for all root     // nodes to be in front)
-    //     let offset =
-    //         tree_sizes[..tree_index].iter().sum::<usize>() + tree_sizes.len() -
-    // (tree_index + 1);
-
-    //     if let Node::Branch(mut branch) = self {
-    //         branch.left += offset;
-    //         branch.right += offset;
-    //         Node::Branch(branch)
-    //     } else {
-    //         self
-    //     }
-    // }
 }
 
 impl fmt::Display for Node {
@@ -199,6 +179,9 @@ impl Forest {
     /// Turn this [`Forest`] into an
     /// [`OptimizedForest`](embedded_rforest::forest::OptimizedForest).
     pub fn optimize_nodes(&self) -> Vec<embedded_rforest::forest::Node> {
+        let max_forest_len = self.trees.iter().map(|t| t.nodes.len()).sum();
+        let mut forest_nodes = Vec::with_capacity(max_forest_len);
+
         // Sort trees by length so that the longest ones end up at the end. If HW is
         // using multiple tree cells, the longer trees have a higher likelihood to end
         // up in a cell that will have fewer trees than its counterparts, improving the
@@ -208,7 +191,7 @@ impl Forest {
             .clone()
             .tap_mut(|v| v.sort_by_key(|t| t.nodes.len()));
 
-        for (tree_id, tree) in trees.iter().enumerate() {
+        for tree in trees.iter() {
             // The vec containing the nodes which have already been assigned
             let mut placed_nodes = Vec::with_capacity(tree.nodes.len());
 
@@ -217,12 +200,6 @@ impl Forest {
 
             // Keep a list of nodes that will be placed later for better optimization
             let mut deferred_nodes: VecDeque<LinkedNode> = VecDeque::new();
-
-            // Each tree starts with a header. We don't know the tree's length yet, so leave
-            // at 0 for now. We also always leave a node's worth of padding so
-            // that the first "real" node ends up on a 128-byte boundary. This is to
-            // optimize the model if the hardware is using a superscalar architecture.
-            placed_nodes.extend([LinkedNode::Header { child_id: 0 }, LinkedNode::Padding]);
 
             let mut parent_id = None;
             let (mut id, mut extracted_node) = waiting_nodes.pop_front().unwrap();
@@ -239,9 +216,9 @@ impl Forest {
                     //     "Node ID {id}. left: {left_child:?}, right: {right_child:?}, parent:
                     // {parent_id:?}" );
 
-                    let node_to_place = LinkedNode::Branch {
+                    let node_to_place = LinkedNode {
                         id,
-                        parent_id,
+                        _parent_id: parent_id,
                         left_child,
                         right_child,
                         split_at: n.split_at,
@@ -281,29 +258,102 @@ impl Forest {
 
                     id = new_id;
                     extracted_node = new_node;
-                } else if let Some(n) = extracted_node.as_leaf() {
-                    panic!("Leaf node should have been extracted already");
                 } else {
-                    unreachable!()
+                    unreachable!("Leaf node should have been extracted already");
                 }
             }
 
-            // TODO: place padding where convenient
-            // TODO: place deferred nodes
-            // TODO: translate node IDs into indices and convert to
-            // embedded_rforest::forest::Node
-
-            println!("Tree {tree_id}:");
-            println!("{tree}");
-            println!("Optimized:");
-            for (idx, n) in placed_nodes.iter().enumerate() {
-                println!("({idx}) {n:?}");
+            for d in deferred_nodes {
+                placed_nodes.push(d);
             }
+
+            assert_eq!(waiting_nodes.len(), 0);
+
+            // Check that every node at an even index has one of its children right after to
+            // maximize superscalar utilization.
+            for chunk in placed_nodes.chunks(2) {
+                // The acceptable case is if both nodes in the
+                // cache line are double predictions (ie, have no pointers).
+                if chunk.len() == 2 {
+                    if chunk[0].left_child.is_prediction()
+                        && chunk[0].right_child.is_prediction()
+                        && chunk[1].left_child.is_prediction()
+                        && chunk[1].right_child.is_prediction()
+                    {
+                        continue;
+                    }
+
+                    let mut utilization_is_maximized = false;
+                    if let Branch::Ptr(ptr) = chunk[0].left_child {
+                        utilization_is_maximized = ptr == chunk[1].id;
+                    }
+
+                    if let Branch::Ptr(ptr) = chunk[0].right_child
+                        && !utilization_is_maximized
+                    {
+                        utilization_is_maximized = ptr == chunk[1].id;
+                    }
+
+                    assert!(utilization_is_maximized);
+                }
+            }
+
+            // Add extra padding at the end to make the tree length even
+            let tail_padding = if placed_nodes.len().is_multiple_of(2) {
+                0
+            } else {
+                1
+            };
+
+            // Add header + padding for full tree length
+            let tree_len: u32 = (placed_nodes.len() + tail_padding + 2)
+                .try_into()
+                .expect("Tree length should fit into u32");
+
+            let mut optimized_tree = Vec::with_capacity(tree_len as usize);
+
+            // Add header + padding at beginning
+            optimized_tree.extend([
+                embedded_rforest::forest::Node {
+                    header: ManuallyDrop::new(TreeHeader::new(tree_len, 2)),
+                },
+                embedded_rforest::forest::Node { padding: 0 },
+            ]);
+
+            for node in &placed_nodes {
+                let left = match node.left_child {
+                    Branch::Ptr(id) => id_position(&placed_nodes, id) + 2,
+                    Branch::Prediction(p) => p,
+                };
+
+                let right = match node.right_child {
+                    Branch::Ptr(id) => id_position(&placed_nodes, id) + 2,
+                    Branch::Prediction(p) => p,
+                };
+
+                optimized_tree.push(embedded_rforest::forest::Node {
+                    branch: ManuallyDrop::new(embedded_rforest::forest::Branch::new(
+                        node.split_with,
+                        node.split_at,
+                        left,
+                        right,
+                        node.left_child.is_prediction(),
+                        node.right_child.is_prediction(),
+                    )),
+                });
+            }
+
+            optimized_tree.extend(
+                std::iter::repeat_n(0, tail_padding)
+                    .map(|p| embedded_rforest::forest::Node { padding: p }),
+            );
+
+            assert_eq!(optimized_tree.len(), tree_len as usize);
+
+            forest_nodes.extend(optimized_tree);
         }
 
-        // TODO: edit tree header with tree length
-
-        todo!()
+        forest_nodes
     }
 
     pub fn num_trees(&self) -> usize {
@@ -389,7 +439,7 @@ impl fmt::Display for Forest {
             self.problem.targets().len(),
         )?;
         for (i, tree) in self.trees.iter().enumerate() {
-            println!("Tree {i}:");
+            writeln!(f, "Tree {i}:")?;
             for (j, node) in tree.nodes.iter().enumerate() {
                 writeln!(f, "\t{j}: {node}")?;
             }
@@ -425,45 +475,30 @@ enum Branch {
     Prediction(u16),
 }
 
-/// Transitive data structure keeping track of a node's parent
-enum LinkedNode {
-    Header {
-        child_id: usize,
-    },
-    Padding,
-    Branch {
-        // node: Node
-        id: usize,
-        split_with: u16,
-        split_at: bf16,
-        parent_id: Option<usize>,
-        left_child: Branch,
-        right_child: Branch,
-    },
+impl Branch {
+    fn is_prediction(&self) -> bool {
+        matches!(self, Branch::Prediction(_))
+    }
 }
 
-impl std::fmt::Debug for LinkedNode {
+/// Transitive data structure keeping track of a node's parent
+#[derive(Debug)]
+struct LinkedNode {
+    id: usize,
+    split_with: u16,
+    split_at: bf16,
+    left_child: Branch,
+    right_child: Branch,
+    _parent_id: Option<usize>,
+}
+
+impl fmt::Display for LinkedNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LinkedNode::Header { child_id: child } => write!(f, "Header, child: {child}"),
-            LinkedNode::Padding => write!(f, "Padding"),
-            LinkedNode::Branch {
-                id,
-                split_with,
-                split_at,
-                parent_id: parent,
-                left_child,
-                right_child,
-            } => f
-                .debug_struct("LinkedNode Branch")
-                .field("id", id)
-                .field("parent", parent)
-                .field("left_child", left_child)
-                .field("right_child", right_child)
-                .field("split_with", split_with)
-                .field("split_at", split_at)
-                .finish(),
-        }
+        write!(
+            f,
+            "ID {}\t| split_with: {}, split_at: {}, left: {:?}, right: {:?}",
+            self.id, self.split_with, self.split_at, self.left_child, self.right_child
+        )
     }
 }
 
@@ -491,4 +526,13 @@ fn extract_branch<'a>(
 ) -> (usize, &'a Node) {
     let pos = unplaced_nodes.iter().position(|(i, _)| *i == id).unwrap();
     unplaced_nodes.remove(pos).unwrap()
+}
+
+fn id_position(nodes: &[LinkedNode], id: usize) -> u16 {
+    nodes
+        .iter()
+        .position(|n| n.id == id)
+        .unwrap_or_else(|| panic!("Could not find node ID {id}"))
+        .try_into()
+        .expect("Node index does not fit into u16")
 }

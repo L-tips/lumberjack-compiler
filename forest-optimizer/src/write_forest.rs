@@ -3,7 +3,7 @@ use color_eyre::{
     eyre::{Context, eyre},
 };
 
-use std::{fs::File, io::Write, num::NonZeroU8, path::Path};
+use std::{fs::File, io::Write, num::NonZeroU16, path::Path};
 
 use embedded_rforest::forest::{Classification, OptimizedForest};
 
@@ -20,11 +20,11 @@ pub fn write_forest(input: impl AsRef<Path>, output: impl AsRef<Path>) -> Result
     let optimized = OptimizedForest::new(
         forest.num_trees().try_into().unwrap(),
         &nodes,
-        NonZeroU8::new(
+        NonZeroU16::new(
             forest
                 .num_features()
                 .try_into()
-                .expect("Features must fit into an u8."),
+                .expect("Features must fit into an u16."),
         )
         .expect("Number of features must be non-zero."),
         Classification::new(forest.num_targets().try_into().unwrap()).unwrap(),

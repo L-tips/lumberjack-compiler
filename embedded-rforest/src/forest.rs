@@ -1,8 +1,5 @@
-use core::{
-    fmt::{self, Debug},
-    num::NonZeroU8,
-};
-use std::mem::ManuallyDrop;
+use core::fmt::{self, Debug};
+use std::{mem::ManuallyDrop, num::NonZeroU16};
 
 use half::bf16;
 use zerocopy::{
@@ -10,22 +7,25 @@ use zerocopy::{
     byteorder::little_endian::{U16, U32},
 };
 
-use crate::{Error, ptr::NodePointer};
+use crate::Error;
 
 pub mod deserialize;
 
 #[cfg(feature = "std")]
 pub mod serialize;
 
+pub const ALIGNMENT: usize = 16;
+pub(crate) type NodePointer = zerocopy::little_endian::U16;
+
 pub type PredictionOutput = u16;
 
 pub struct Classification {
-    num_targets: NonZeroU8,
+    num_targets: NonZeroU16,
 }
 
 impl Classification {
-    pub fn new(num_targets: u8) -> Result<Self, Error> {
-        let num_targets = NonZeroU8::new(num_targets).ok_or(Error::MalformedForest)?;
+    pub fn new(num_targets: u16) -> Result<Self, Error> {
+        let num_targets = NonZeroU16::new(num_targets).ok_or(Error::MalformedForest)?;
         Ok(Self { num_targets })
     }
 }
@@ -103,8 +103,8 @@ impl Branch {
     pub fn new(
         split_with: u16,
         split_at: bf16,
-        left: NodePointer,
-        right: NodePointer,
+        left: u16,
+        right: u16,
         left_leaf: bool,
         right_leaf: bool,
     ) -> Self {
@@ -112,8 +112,8 @@ impl Branch {
         Self {
             flags,
             split_at,
-            left,
-            right,
+            left: U16::new(left),
+            right: U16::new(right),
         }
     }
 
@@ -140,6 +140,25 @@ impl Branch {
     pub fn flags(&self) -> Flags {
         self.flags
     }
+
+    pub fn is_padding(&self) -> bool {
+        self.as_bytes().iter().all(|b| *b == 0)
+    }
+}
+
+impl fmt::Display for Branch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Branch | split var: {}, split: {}, left: {}/{}, right: {}/{}",
+            self.flags.split_var_idx(),
+            self.split_at,
+            self.flags.left_prediction(),
+            self.left,
+            self.flags.right_prediction(),
+            self.right,
+        )
+    }
 }
 
 pub union Node {
@@ -148,31 +167,16 @@ pub union Node {
     pub branch: ManuallyDrop<Branch>,
 }
 
-impl fmt::Display for Branch {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Branch | split var: {}, split: {}, left: {}, right: {}",
-            self.flags.split_var_idx(),
-            self.split_at,
-            self.left,
-            self.right
-        )
-    }
-}
-
-pub const LEN_PADDING: usize = 6;
-
 /// An array-backed, optimized random forest model
-#[repr(C, align(8))]
+#[repr(C, align(16))]
 #[derive(TryFromBytes, KnownLayout, Immutable)]
 pub struct OptimizedForest<'data> {
     num_trees: U32,
-    num_features: NonZeroU8,
+    num_features: U16,
     /// If num_targets is Some, we have a classification problem.
     /// Otherwise, we have a regression problem.
-    num_targets: NonZeroU8,
-    _padding: [u8; LEN_PADDING],
+    num_targets: U16,
+    _padding: u64,
     nodes: &'data [Node],
 }
 
@@ -180,15 +184,15 @@ impl<'data> OptimizedForest<'data> {
     pub fn new(
         num_trees: u32,
         nodes: &'data [Node],
-        num_features: NonZeroU8,
+        num_features: NonZeroU16,
         problem: Classification,
     ) -> Result<Self, Error> {
         Ok(Self {
             num_trees: U32::new(num_trees),
+            num_features: U16::new(num_features.get()),
+            num_targets: U16::new(problem.num_targets.get()),
+            _padding: 0,
             nodes,
-            num_features,
-            num_targets: problem.num_targets,
-            _padding: [0; 6],
         })
     }
 
@@ -200,107 +204,202 @@ impl<'data> OptimizedForest<'data> {
         self.num_trees.get()
     }
 
-    pub fn num_targets(&self) -> NonZeroU8 {
+    pub fn num_targets(&self) -> U16 {
         self.num_targets
     }
 
-    pub fn num_features(&self) -> NonZeroU8 {
+    pub fn num_features(&self) -> U16 {
         self.num_features
     }
 
     pub fn verify(&self) -> Result<(), Error> {
-        todo!()
-        // let nodes_len = self.nodes().len();
+        let nodes_len = self.nodes().len();
 
-        // for (i, branch) in self.nodes().iter().enumerate() {
-        //     let is_left_prediction = branch.flags().left_prediction();
-        //     let is_right_prediction = branch.flags().right_prediction();
+        for header_idx in self.tree_headers() {
+            let header = unsafe { &self.nodes[header_idx].header };
 
-        //     let left_ptr = branch.left_ptr().as_ptr() as usize;
-        //     let right_ptr = branch.right_ptr().as_ptr() as usize;
+            if !(header as *const _ as usize).is_multiple_of(ALIGNMENT) {
+                return Err(Error::MisalignedData);
+            }
+            let last_node_idx = header_idx + header.tree_len as usize - 1;
+            let tree_nodes = &self.nodes[header_idx..=last_node_idx];
 
-        //     if (!is_left_prediction && (left_ptr <= i || left_ptr >=
-        // nodes_len))         || (!is_right_prediction && (right_ptr <= i ||
-        // right_ptr >= nodes_len))     {
-        //         #[cfg(feature = "std")]
-        //         println!(
-        //             "Malformed forest: idx: {i}, nodes_len: {nodes_len}, is_left_prediction: {is_left_prediction}, is_right_prediction: {is_right_prediction}, left_ptr: {left_ptr}, right_ptr: {right_ptr}"
-        //         );
-        //         return Err(Error::MalformedForest);
-        //     }
-        // }
+            for (i, branch) in tree_nodes
+                .iter()
+                .enumerate()
+                .skip(header.first_node_idx as _)
+            {
+                let branch = unsafe { &branch.branch };
 
-        // Ok(())
+                // Skip padding
+                if branch.is_padding() {
+                    continue;
+                }
+
+                let is_left_prediction = branch.flags().left_prediction();
+                let is_right_prediction = branch.flags().right_prediction();
+
+                let left_ptr = branch.left_ptr().get() as usize;
+                let right_ptr = branch.right_ptr().get() as usize;
+
+                if (!is_left_prediction && (left_ptr <= i || left_ptr >= nodes_len))
+                    || (!is_right_prediction && (right_ptr <= i || right_ptr >= nodes_len))
+                {
+                    #[cfg(feature = "std")]
+                    println!(
+                        "Malformed forest: idx: {i}, nodes_len: {nodes_len}, is_left_prediction: {is_left_prediction}, is_right_prediction: {is_right_prediction}, left_ptr: {left_ptr}, right_ptr: {right_ptr}"
+                    );
+                    return Err(Error::MalformedForest);
+                }
+            }
+        }
+
+        Ok(())
     }
 
-    pub fn next_left(&self, branch: &Branch) -> &Branch {
-        todo!()
-        // &self.nodes[branch.left_ptr().as_ptr() as usize]
+    pub fn next_left<'a>(tree_nodes: &'a [Node], branch: &ManuallyDrop<Branch>) -> &'a Node {
+        &tree_nodes[branch.left_ptr().get() as usize]
     }
 
-    pub fn next_right(&self, branch: &Branch) -> &Branch {
-        todo!()
-        // &self.nodes[branch.right_ptr().as_ptr() as usize]
+    pub fn next_right<'a>(tree_nodes: &'a [Node], branch: &ManuallyDrop<Branch>) -> &'a Node {
+        &tree_nodes[branch.right_ptr().get() as usize]
+    }
+
+    /// Return an iterator which yields the indices of all tree headers in this
+    /// forest
+    pub fn tree_headers(&self) -> HeadersIterator<'_> {
+        HeadersIterator::new(self.nodes, self.num_trees.get() as _)
     }
 
     #[inline(never)]
     pub fn predict(&self, features: &[bf16]) -> PredictionOutput {
-        todo!()
-        // let mut votes = [0; 255];
+        const MAX_NUM_TREES: usize = 255;
+        let mut votes = [0; MAX_NUM_TREES];
 
-        // for tree_id in 0..self.num_trees.get() {
-        //     let mut node = &self.nodes[tree_id as usize];
+        for header_idx in self.tree_headers() {
+            let header = unsafe { &self.nodes[header_idx].header };
+            println!("idx: {header_idx}, header: {header:?}");
+            let last_node_idx = header_idx + header.tree_len as usize - 1;
+            let tree_nodes = &self.nodes[header_idx..=last_node_idx];
 
-        //     let prediction = loop {
-        //         let test = features[node.split_with() as usize] <=
-        // node.split_at();
+            let mut node = unsafe { &tree_nodes[header.first_node_idx as usize].branch };
 
-        //         if test {
-        //             if node.flags.left_prediction() {
-        //                 break node.left_ptr().as_ptr();
-        //             } else {
-        //                 node = self.next_left(node);
-        //             }
-        //         } else if node.flags.right_prediction() {
-        //             break node.right_ptr().as_ptr();
-        //         } else {
-        //             node = self.next_right(node);
-        //         }
-        //     };
+            let prediction = loop {
+                let test = features[node.split_with() as usize] <= node.split_at();
 
-        //     // Register the vote for this tree's prediction
-        //     let vote = votes
-        //         .get_mut(prediction as usize)
-        //         .expect("Not enough space for this class");
-        //     *vote += 1;
-        // }
+                if test {
+                    if node.flags.left_prediction() {
+                        break node.left_ptr().get();
+                    } else {
+                        node = unsafe { &Self::next_left(tree_nodes, node).branch };
+                    }
+                } else if node.flags.right_prediction() {
+                    break node.right_ptr().get();
+                } else {
+                    node = unsafe { &Self::next_right(tree_nodes, node).branch };
+                }
+            };
 
-        // votes
-        //     .into_iter()
-        //     .enumerate()
-        //     .max_by(|(_, a), (_, b)| a.cmp(b))
-        //     .unwrap()
-        //     .0
-        //     .try_into()
-        //     .unwrap()
+            // Register the vote for this tree's prediction
+            let vote = votes
+                .get_mut(prediction as usize)
+                .expect("Not enough space for this class");
+            *vote += 1;
+        }
+
+        votes
+            .into_iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.cmp(b))
+            .unwrap()
+            .0
+            .try_into()
+            .unwrap()
     }
 }
 
-// impl fmt::Display for OptimizedForest<'_> {
-// fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         writeln!(
-//             f,
-//             "OPTIMIZED CLASSIFICATION Forest: {} trees, size {}, {} features,
-// {} targets\n------------",             self.num_trees,
-//             self.nodes.len(),
-//             self.num_features,
-//             tgts
-//         )?;
-//     }
+pub struct HeadersIterator<'a> {
+    nodes: &'a [Node],
+    current_idx: usize,
+    tree_idx: usize,
+    num_trees: usize,
+    first_pass: bool,
+}
 
-//     for (i, node) in self.nodes.iter().enumerate() {
-//         writeln!(f, "\t{i}: {node}")?;
-//     }
-//     writeln!(f, "------------")?;
-//     Ok(())
-// }
+impl<'a> HeadersIterator<'a> {
+    fn new(nodes: &'a [Node], num_trees: usize) -> Self {
+        Self {
+            nodes,
+            current_idx: 0,
+            tree_idx: 0,
+            first_pass: true,
+            num_trees,
+        }
+    }
+}
+
+impl<'a> Iterator for HeadersIterator<'a> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.first_pass {
+            self.first_pass = false;
+            return Some(0);
+        }
+        self.tree_idx += 1;
+        if self.tree_idx < self.num_trees {
+            self.current_idx += unsafe { self.nodes[self.current_idx].header.tree_len as usize };
+            Some(self.current_idx)
+        } else {
+            None
+        }
+    }
+}
+
+impl fmt::Display for OptimizedForest<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "OPTIMIZED CLASSIFICATION Forest: {} trees, size {}, {} features,
+{} targets\n------------",
+            self.num_trees,
+            self.nodes.len(),
+            self.num_features,
+            self.num_targets
+        )?;
+
+        writeln!(f, "TREE #0")?;
+
+        let mut tree_idx = 0;
+        let mut node_idx = 0;
+        let mut tree_len = 0;
+        let mut first_node_idx = 0;
+
+        for (abs_id, node) in self.nodes.iter().enumerate() {
+            write!(f, "[{abs_id}/{node_idx}]\t")?;
+            if node_idx == 0 {
+                let header = unsafe { &node.header };
+                writeln!(f, "{header:?}")?;
+
+                first_node_idx = header.first_node_idx;
+                tree_len = header.tree_len;
+            } else if node_idx < first_node_idx || unsafe { node.branch.is_padding() } {
+                let padding = unsafe { node.padding };
+                writeln!(f, "Padding | {padding}")?;
+            } else {
+                let n = unsafe { &node.branch };
+                writeln!(f, "{}", ManuallyDrop::into_inner(n.clone()))?;
+            }
+
+            node_idx += 1;
+
+            if node_idx >= tree_len {
+                tree_idx += 1;
+                node_idx = 0;
+                writeln!(f, "TREE #{tree_idx}")?;
+            }
+        }
+        writeln!(f, "------------")?;
+        Ok(())
+    }
+}
