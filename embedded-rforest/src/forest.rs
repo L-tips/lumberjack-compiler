@@ -87,6 +87,14 @@ impl TreeHeader {
     pub fn set_tree_len(&mut self, tree_len: u32) {
         self.tree_len = tree_len;
     }
+
+    pub fn tree_len(&self) -> u32 {
+        self.tree_len
+    }
+
+    pub fn first_node_idx(&self) -> u32 {
+        self.first_node_idx
+    }
 }
 
 #[derive(Debug, Clone, IntoBytes, KnownLayout, Immutable, FromBytes)]
