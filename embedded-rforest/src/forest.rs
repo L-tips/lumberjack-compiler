@@ -336,6 +336,14 @@ impl<'a> HeadersIterator<'a> {
             num_trees,
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.num_trees
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.num_trees == 0
+    }
 }
 
 impl<'a> Iterator for HeadersIterator<'a> {
