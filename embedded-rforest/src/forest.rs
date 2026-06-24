@@ -1,5 +1,5 @@
 use core::fmt::{self, Debug};
-use core::{mem::ManuallyDrop, num::NonZeroU16};
+use core::num::NonZeroU16;
 
 use half::bf16;
 use zerocopy::{
@@ -35,7 +35,7 @@ impl Classification {
 pub struct Flags(U16);
 
 impl Flags {
-    fn new(split_var_idx: u16, left_is_prediction: bool, right_is_prediction: bool) -> Self {
+    const fn new(split_var_idx: u16, left_is_prediction: bool, right_is_prediction: bool) -> Self {
         assert!(split_var_idx <= u16::MAX >> 2);
 
         let val = split_var_idx
@@ -148,10 +148,6 @@ impl Branch {
     pub fn flags(&self) -> Flags {
         self.flags
     }
-
-    pub fn is_padding(&self) -> bool {
-        self.as_bytes().iter().all(|b| *b == 0)
-    }
 }
 
 impl fmt::Display for Branch {
@@ -169,10 +165,35 @@ impl fmt::Display for Branch {
     }
 }
 
-pub union Node {
-    pub header: ManuallyDrop<TreeHeader>,
-    pub padding: u64,
-    pub branch: ManuallyDrop<Branch>,
+#[repr(C, align(8))]
+#[derive(Clone, IntoBytes, KnownLayout, Immutable, FromBytes)]
+pub struct Node([u8; 8]);
+
+pub const PADDING: Node = Node([0; 8]);
+
+impl Node {
+    #[inline]
+    pub fn as_header(&self) -> &TreeHeader {
+        // Infallible: any 8 bytes are a valid TreeHeader (two u32s).
+        TreeHeader::ref_from_bytes(&self.0).unwrap()
+    }
+
+    pub fn from_header(header: TreeHeader) -> Self {
+        Self(header.as_bytes().try_into().unwrap())
+    }
+
+    pub fn as_branch(&self) -> &Branch {
+        // Infaillible for the same reason
+        Branch::ref_from_bytes(&self.0).unwrap()
+    }
+
+    pub fn from_branch(branch: Branch) -> Self {
+        Self(branch.as_bytes().try_into().unwrap())
+    }
+
+    pub fn is_padding(&self) -> bool {
+        self.0.iter().all(|b| *b == 0)
+    }
 }
 
 /// An array-backed, optimized random forest model
@@ -224,7 +245,7 @@ impl<'data> OptimizedForest<'data> {
         let nodes_len = self.nodes().len();
 
         for header_idx in self.tree_headers() {
-            let header = unsafe { &self.nodes[header_idx].header };
+            let header = self.nodes[header_idx].as_header();
 
             if !(header as *const _ as usize).is_multiple_of(ALIGNMENT) {
                 return Err(Error::MisalignedData);
@@ -232,17 +253,17 @@ impl<'data> OptimizedForest<'data> {
             let last_node_idx = header_idx + header.tree_len as usize - 1;
             let tree_nodes = &self.nodes[header_idx..=last_node_idx];
 
-            for (i, branch) in tree_nodes
+            for (i, node) in tree_nodes
                 .iter()
                 .enumerate()
                 .skip(header.first_node_idx as _)
             {
-                let branch = unsafe { &branch.branch };
-
                 // Skip padding
-                if branch.is_padding() {
+                if node.is_padding() {
                     continue;
                 }
+
+                let branch = node.as_branch();
 
                 let is_left_prediction = branch.flags().left_prediction();
                 let is_right_prediction = branch.flags().right_prediction();
@@ -265,11 +286,11 @@ impl<'data> OptimizedForest<'data> {
         Ok(())
     }
 
-    pub fn next_left<'a>(tree_nodes: &'a [Node], branch: &ManuallyDrop<Branch>) -> &'a Node {
+    pub fn next_left<'a>(tree_nodes: &'a [Node], branch: &Branch) -> &'a Node {
         &tree_nodes[branch.left_ptr().get() as usize]
     }
 
-    pub fn next_right<'a>(tree_nodes: &'a [Node], branch: &ManuallyDrop<Branch>) -> &'a Node {
+    pub fn next_right<'a>(tree_nodes: &'a [Node], branch: &Branch) -> &'a Node {
         &tree_nodes[branch.right_ptr().get() as usize]
     }
 
@@ -285,7 +306,7 @@ impl<'data> OptimizedForest<'data> {
         let mut votes = [0; MAX_NUM_TREES];
 
         for header_idx in self.tree_headers() {
-            let header = unsafe { &self.nodes[header_idx].header };
+            let header = self.nodes[header_idx].as_header();
 
             #[cfg(feature = "std")]
             println!("idx: {header_idx}, header: {header:?}");
@@ -293,7 +314,7 @@ impl<'data> OptimizedForest<'data> {
             let last_node_idx = header_idx + header.tree_len as usize - 1;
             let tree_nodes = &self.nodes[header_idx..=last_node_idx];
 
-            let mut node = unsafe { &tree_nodes[header.first_node_idx as usize].branch };
+            let mut node = tree_nodes[header.first_node_idx as usize].as_branch();
 
             let prediction = loop {
                 let test = features[node.split_with() as usize] <= node.split_at();
@@ -302,12 +323,12 @@ impl<'data> OptimizedForest<'data> {
                     if node.flags.left_prediction() {
                         break node.left_ptr().get();
                     } else {
-                        node = unsafe { &Self::next_left(tree_nodes, node).branch };
+                        node = Self::next_left(tree_nodes, node).as_branch();
                     }
                 } else if node.flags.right_prediction() {
                     break node.right_ptr().get();
                 } else {
-                    node = unsafe { &Self::next_right(tree_nodes, node).branch };
+                    node = Self::next_right(tree_nodes, node).as_branch();
                 }
             };
 
@@ -367,7 +388,7 @@ impl<'a> Iterator for HeadersIterator<'a> {
         }
         self.tree_idx += 1;
         if self.tree_idx < self.num_trees {
-            self.current_idx += unsafe { self.nodes[self.current_idx].header.tree_len as usize };
+            self.current_idx += self.nodes[self.current_idx].as_header().tree_len as usize;
             Some(self.current_idx)
         } else {
             None
@@ -395,19 +416,19 @@ impl fmt::Display for OptimizedForest<'_> {
         let mut first_node_idx = 0;
 
         for (abs_id, node) in self.nodes.iter().enumerate() {
+            let branch = node.as_branch();
+
             write!(f, "[{abs_id}/{node_idx}]\t")?;
             if node_idx == 0 {
-                let header = unsafe { &node.header };
+                let header = node.as_header();
                 writeln!(f, "{header:?}")?;
 
                 first_node_idx = header.first_node_idx;
                 tree_len = header.tree_len;
-            } else if node_idx < first_node_idx || unsafe { node.branch.is_padding() } {
-                let padding = unsafe { node.padding };
-                writeln!(f, "Padding | {padding}")?;
+            } else if node_idx < first_node_idx || node.is_padding() {
+                writeln!(f, "Padding | {:?}", node.as_bytes())?;
             } else {
-                let n = unsafe { &node.branch };
-                writeln!(f, "{}", ManuallyDrop::into_inner(n.clone()))?;
+                writeln!(f, "{branch}")?;
             }
 
             node_idx += 1;

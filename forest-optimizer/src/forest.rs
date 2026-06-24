@@ -1,9 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::mem::ManuallyDrop;
 
 use color_eyre::Result;
-use embedded_rforest::forest::TreeHeader;
+use embedded_rforest::forest::{PADDING, TreeHeader};
 use half::bf16;
 use tap::Tap;
 
@@ -314,10 +313,8 @@ impl Forest {
 
             // Add header + padding at beginning
             optimized_tree.extend([
-                embedded_rforest::forest::Node {
-                    header: ManuallyDrop::new(TreeHeader::new(tree_len, 2)),
-                },
-                embedded_rforest::forest::Node { padding: 0 },
+                embedded_rforest::forest::Node::from_header(TreeHeader::new(tree_len, 2)),
+                PADDING,
             ]);
 
             for node in &placed_nodes {
@@ -331,22 +328,19 @@ impl Forest {
                     Branch::Prediction(p) => p,
                 };
 
-                optimized_tree.push(embedded_rforest::forest::Node {
-                    branch: ManuallyDrop::new(embedded_rforest::forest::Branch::new(
+                optimized_tree.push(embedded_rforest::forest::Node::from_branch(
+                    embedded_rforest::forest::Branch::new(
                         node.split_with,
                         node.split_at,
                         left,
                         right,
                         node.left_child.is_prediction(),
                         node.right_child.is_prediction(),
-                    )),
-                });
+                    ),
+                ));
             }
 
-            optimized_tree.extend(
-                std::iter::repeat_n(0, tail_padding)
-                    .map(|p| embedded_rforest::forest::Node { padding: p }),
-            );
+            optimized_tree.extend(std::iter::repeat_n(PADDING, tail_padding));
 
             assert_eq!(optimized_tree.len(), tree_len as usize);
 

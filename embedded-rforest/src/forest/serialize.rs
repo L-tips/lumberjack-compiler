@@ -27,7 +27,7 @@ impl OptimizedForest<'_> {
         // Insert all the nodes
         for node in self.nodes {
             // Just for byte-copying purposes, we assume all nodes are branches.
-            bytes.extend_from_slice(unsafe { node.branch.clone() }.as_bytes());
+            bytes.extend_from_slice(node.as_bytes());
         }
 
         bytes
