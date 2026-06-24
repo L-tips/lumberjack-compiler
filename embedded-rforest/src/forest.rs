@@ -1,5 +1,5 @@
 use core::fmt::{self, Debug};
-use std::{mem::ManuallyDrop, num::NonZeroU16};
+use core::{mem::ManuallyDrop, num::NonZeroU16};
 
 use half::bf16;
 use zerocopy::{
@@ -286,7 +286,10 @@ impl<'data> OptimizedForest<'data> {
 
         for header_idx in self.tree_headers() {
             let header = unsafe { &self.nodes[header_idx].header };
+
+            #[cfg(feature = "std")]
             println!("idx: {header_idx}, header: {header:?}");
+
             let last_node_idx = header_idx + header.tree_len as usize - 1;
             let tree_nodes = &self.nodes[header_idx..=last_node_idx];
 

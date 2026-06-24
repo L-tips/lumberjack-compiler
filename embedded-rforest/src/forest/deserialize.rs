@@ -1,5 +1,5 @@
+use core::num::NonZeroU16;
 use core::ops::Deref;
-use std::num::NonZeroU16;
 
 use zerocopy::{byteorder::little_endian::U32, little_endian::U16};
 
