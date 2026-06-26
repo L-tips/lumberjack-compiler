@@ -7,7 +7,7 @@ use std::{fs::File, io::Write, num::NonZeroU16, path::Path};
 
 use embedded_rforest::forest::{Classification, OptimizedForest};
 
-use crate::{csv_forest::CsvForest, forest::Forest};
+use crate::{csv_forest::CsvForest, forest::Forest, serialize::to_bytes};
 
 pub fn write_forest(input: impl AsRef<Path>, output: impl AsRef<Path>) -> Result<()> {
     // Read the input file
@@ -31,7 +31,7 @@ pub fn write_forest(input: impl AsRef<Path>, output: impl AsRef<Path>) -> Result
     )
     .map_err(|_| eyre!("Malformed forest"))?;
 
-    let serialized = optimized.to_bytes();
+    let serialized = to_bytes(&optimized);
     let ptr = serialized.as_ptr();
     assert!((ptr as usize).is_multiple_of(align_of_val(&optimized)));
 

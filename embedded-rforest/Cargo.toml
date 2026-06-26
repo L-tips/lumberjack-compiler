@@ -4,14 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-aligned-vec = { version = "0.6.1", optional = true }
-zerocopy = { version = "0.8.7", features = ["derive"] }
 
-[dependencies.half]
-workspace = true
+half = { workspace = true }
+zerocopy = { workspace = true }
 
 [dev-dependencies]
 anyhow = "1.0.91"
-
-[features]
-std = ["dep:aligned-vec", "half/std"]

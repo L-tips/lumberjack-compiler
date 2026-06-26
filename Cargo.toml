@@ -4,4 +4,5 @@ resolver = "2"
 members = ["embedded-rforest", "forest-optimizer"]
 
 [workspace.dependencies]
-half = { version = "2.6.0", default-features = false, features = ["serde", "zerocopy"] }
+half = { version = "2.6.0", default-features = false, features = ["zerocopy"] }
+zerocopy = { version = "0.8.7", features = ["derive"] }

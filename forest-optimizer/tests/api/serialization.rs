@@ -3,6 +3,7 @@ use std::num::NonZeroU16;
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use embedded_rforest::forest::{Classification, OptimizedForest};
+use forest_optimizer::serialize::to_bytes;
 
 use crate::datasets::iris;
 use crate::helpers::{get_forest, get_test_data};
@@ -24,7 +25,7 @@ fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> 
         .verify()
         .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
 
-    let serialized = optimized.to_bytes();
+    let serialized = to_bytes(&optimized);
     let optimized =
         OptimizedForest::deserialize(&serialized).map_err(|e| eyre!("Malfomed forest: {e:?}"))?;
 

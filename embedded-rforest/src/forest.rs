@@ -11,9 +11,6 @@ use crate::Error;
 
 pub mod deserialize;
 
-#[cfg(feature = "std")]
-pub mod serialize;
-
 pub const ALIGNMENT: usize = 16;
 pub(crate) type NodePointer = zerocopy::little_endian::U16;
 
@@ -229,8 +226,8 @@ impl<'data> OptimizedForest<'data> {
         self.nodes
     }
 
-    pub fn num_trees(&self) -> u32 {
-        self.num_trees.get()
+    pub fn num_trees(&self) -> U32 {
+        self.num_trees
     }
 
     pub fn num_targets(&self) -> U16 {
@@ -274,10 +271,6 @@ impl<'data> OptimizedForest<'data> {
                 if (!is_left_prediction && (left_ptr <= i || left_ptr >= nodes_len))
                     || (!is_right_prediction && (right_ptr <= i || right_ptr >= nodes_len))
                 {
-                    #[cfg(feature = "std")]
-                    println!(
-                        "Malformed forest: idx: {i}, nodes_len: {nodes_len}, is_left_prediction: {is_left_prediction}, is_right_prediction: {is_right_prediction}, left_ptr: {left_ptr}, right_ptr: {right_ptr}"
-                    );
                     return Err(Error::MalformedForest);
                 }
             }
@@ -307,9 +300,6 @@ impl<'data> OptimizedForest<'data> {
 
         for header_idx in self.tree_headers() {
             let header = self.nodes[header_idx].as_header();
-
-            #[cfg(feature = "std")]
-            println!("idx: {header_idx}, header: {header:?}");
 
             let last_node_idx = header_idx + header.tree_len as usize - 1;
             let tree_nodes = &self.nodes[header_idx..=last_node_idx];
