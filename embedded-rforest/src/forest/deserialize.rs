@@ -1,10 +1,14 @@
-use core::{marker::PhantomData, num::NonZeroU8, ops::Deref};
+use core::num::NonZeroU16;
+use core::ops::Deref;
 
-use zerocopy::byteorder::little_endian::U32;
+use zerocopy::{byteorder::little_endian::U32, little_endian::U16};
 
-use crate::Error;
+use crate::{
+    Error,
+    forest::{ALIGNMENT, Node},
+};
 
-use super::{Branch, OptimizedForest, ProblemType};
+use super::{Branch, OptimizedForest};
 
 #[macro_export]
 macro_rules! static_storage {
@@ -18,11 +22,7 @@ macro_rules! static_storage {
     }};
 }
 
-#[cfg_attr(
-    any(target_pointer_width = "32", target_pointer_width = "16"),
-    repr(align(4))
-)]
-#[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+#[repr(align(16))]
 pub struct BackingStorage<const N: usize>([u8; N]);
 
 impl<const N: usize> BackingStorage<N> {
@@ -43,7 +43,7 @@ impl<const N: usize> Deref for BackingStorage<N> {
     }
 }
 
-impl<'a, P: ProblemType> OptimizedForest<'a, P> {
+impl<'a> OptimizedForest<'a> {
     pub fn deserialize(buffer: &'a [u8]) -> Result<Self, Error> {
         let base_ptr = buffer.as_ptr();
 
@@ -51,66 +51,52 @@ impl<'a, P: ProblemType> OptimizedForest<'a, P> {
         assert_eq!(base_ptr as usize % align_of::<Self>(), 0);
 
         // Ensure we have enough data for the fixed-size part of ConcreteType
-        let header_size = size_of::<u32>()  // num_trees
-            + size_of::<u8>()               // num_features
-            + size_of::<u8>()               // num_targets
-            + 2                             // padding
-            + size_of::<Branch>(); // At least 1 node
+        let header_len = size_of::<u32>()  // num_trees
+            + size_of::<u16>()               // num_features
+            + size_of::<u16>()               // num_targets
+            + size_of::<u64>(); // padding
 
-        // Ensure we at least have enough data for all fields
-        assert!(buffer.len() >= header_size);
+        // Ensure we at least have enough data for all fields + at least 1 node
+        assert!(buffer.len() >= header_len + size_of::<Node>());
 
         unsafe {
             // Number of trees (4 bytes)
             let a_ptr = base_ptr as *const u32;
             let num_trees = U32::new(*a_ptr);
 
-            // Number of features (1 byte)
-            let b_ptr = a_ptr.add(1) as *const u8;
+            // Number of features (2 bytes)
+            let b_ptr = a_ptr.add(1) as *const U16;
             let num_features = *b_ptr;
+            NonZeroU16::new(num_features.get()).ok_or(Error::NoFeatures)?;
 
-            // Number of targets (1 byte)
+            // Number of targets (2 bytes)
             let c_ptr = b_ptr.add(1);
-            let num_targets = if *c_ptr == 0 {
-                None
-            } else {
-                Some(NonZeroU8::new_unchecked(*c_ptr))
-            };
+            let num_targets = *c_ptr;
+            NonZeroU16::new(num_targets.get()).ok_or(Error::NoTargets)?;
 
-            // Check that the forest is of the correct problem type according to the P type
-            // parameter
-            if (num_targets.is_some() && !P::HAS_TARGETS)
-                || (num_targets.is_none() && P::HAS_TARGETS)
-            {
-                return Err(Error::WrongProblemType);
-            }
-
-            // Get start of node slice and skip padding (2 bytes)
-            let header_len = size_of::<u32>() + size_of::<u8>() * 2 + 2;
+            // Get start of node slice and skip padding (8 bytes)
             let slice_size = buffer.len() - header_len;
-            assert_eq!(slice_size % size_of::<Branch>(), 0);
 
-            let slice_len = slice_size / size_of::<Branch>();
-            let slice_ptr = (base_ptr.byte_add(header_len)) as *const Branch;
-            let branch_slice = core::slice::from_raw_parts(slice_ptr, slice_len);
-
-            for branch in branch_slice.iter() {
-                if !branch.flags.left_prediction() && (branch.left.as_ptr() as usize) >= slice_len {
-                    return Err(Error::MalformedForest);
-                }
-                if !branch.flags.right_prediction() && (branch.right.as_ptr() as usize) >= slice_len
-                {
-                    return Err(Error::MalformedForest);
-                };
+            if !slice_size.is_multiple_of(size_of::<Branch>()) {
+                return Err(Error::MalformedForest);
             }
+
+            let slice_len = slice_size / size_of::<Node>();
+            let slice_ptr = (base_ptr.byte_add(header_len)) as *const Node;
+
+            // Node list must be 128-bit aligned
+            if !(slice_ptr as usize).is_multiple_of(ALIGNMENT) {
+                return Err(Error::MisalignedData);
+            }
+
+            let nodes = core::slice::from_raw_parts(slice_ptr, slice_len);
 
             Ok(OptimizedForest {
                 num_trees,
                 num_features,
                 num_targets,
-                _padding: [0; 2],
-                nodes: branch_slice,
-                _problem: PhantomData,
+                _padding: 0,
+                nodes,
             })
         }
     }

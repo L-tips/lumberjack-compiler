@@ -1,2 +1,6 @@
 target/
 output/
+.vscode/
+
+.direnv
+.envrc
