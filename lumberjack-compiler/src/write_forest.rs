@@ -5,7 +5,7 @@ use color_eyre::{
 
 use std::{fs::File, io::Write, num::NonZeroU16, path::Path};
 
-use embedded_rforest::forest::{Classification, OptimizedForest};
+use lumberjack_model::forest::{Classification, OptimizedForest};
 
 use crate::{csv_forest::CsvForest, forest::Forest, serialize::to_bytes};
 

@@ -2,8 +2,8 @@ use std::num::NonZeroU16;
 
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
-use embedded_rforest::forest::{Classification, OptimizedForest};
-use forest_optimizer::serialize::to_bytes;
+use lumberjack_compiler::serialize::to_bytes;
+use lumberjack_model::forest::{Classification, OptimizedForest};
 
 use crate::datasets::iris;
 use crate::helpers::{get_forest, get_test_data};
@@ -43,7 +43,7 @@ fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> 
 
 #[test]
 fn classification_static_storage_deserializes_correctly() -> Result<()> {
-    let buf = embedded_rforest::static_storage!("../test-forests/forest_iris_5.rforest");
+    let buf = lumberjack_model::static_storage!("../test-forests/forest_iris_5.rforest");
 
     let forest = get_forest("./tests/test-forests/forest_iris_5.csv")?;
 

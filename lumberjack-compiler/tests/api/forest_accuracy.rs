@@ -2,7 +2,7 @@ use std::num::NonZeroU16;
 
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
-use embedded_rforest::forest::{Classification, OptimizedForest};
+use lumberjack_model::forest::{Classification, OptimizedForest};
 
 use crate::datasets::iris;
 use crate::helpers::{get_forest, get_test_data};

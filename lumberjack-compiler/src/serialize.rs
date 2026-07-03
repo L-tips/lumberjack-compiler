@@ -1,7 +1,7 @@
 use aligned_vec::AVec;
 use zerocopy::IntoBytes;
 
-use embedded_rforest::forest::{ALIGNMENT, OptimizedForest};
+use lumberjack_model::forest::{ALIGNMENT, OptimizedForest};
 
 pub fn to_bytes(forest: &OptimizedForest) -> AVec<u8> {
     let mut bytes = AVec::<u8>::with_capacity(ALIGNMENT, 8);

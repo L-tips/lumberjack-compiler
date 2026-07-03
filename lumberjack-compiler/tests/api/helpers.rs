@@ -2,8 +2,8 @@ use std::path::Path;
 
 use color_eyre::Result;
 
-use forest_optimizer::csv_forest::CsvForest;
-use forest_optimizer::forest::Forest;
+use lumberjack_compiler::csv_forest::CsvForest;
+use lumberjack_compiler::forest::Forest;
 use serde::de::DeserializeOwned;
 
 pub fn get_forest(path: impl AsRef<Path>) -> Result<Forest> {

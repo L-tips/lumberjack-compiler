@@ -1,4 +1,4 @@
-pub use embedded_rforest;
+pub use lumberjack_model;
 
 pub mod csv_forest;
 pub mod forest;

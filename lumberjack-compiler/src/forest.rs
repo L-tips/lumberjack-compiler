@@ -2,8 +2,8 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
 use color_eyre::Result;
-use embedded_rforest::forest::{PADDING, TreeHeader};
 use half::bf16;
+use lumberjack_model::forest::{PADDING, TreeHeader};
 use tap::Tap;
 
 use crate::{
@@ -176,8 +176,8 @@ impl Forest {
     }
 
     /// Turn this [`Forest`] into an
-    /// [`OptimizedForest`](embedded_rforest::forest::OptimizedForest).
-    pub fn optimize_nodes(&self) -> Vec<embedded_rforest::forest::Node> {
+    /// [`OptimizedForest`](lumberjack_model::forest::OptimizedForest).
+    pub fn optimize_nodes(&self) -> Vec<lumberjack_model::forest::Node> {
         let max_forest_len = self.trees.iter().map(|t| t.nodes.len()).sum();
         let mut forest_nodes = Vec::with_capacity(max_forest_len);
 
@@ -313,7 +313,7 @@ impl Forest {
 
             // Add header + padding at beginning
             optimized_tree.extend([
-                embedded_rforest::forest::Node::from_header(TreeHeader::new(tree_len, 2)),
+                lumberjack_model::forest::Node::from_header(TreeHeader::new(tree_len, 2)),
                 PADDING,
             ]);
 
@@ -328,8 +328,8 @@ impl Forest {
                     Branch::Prediction(p) => p,
                 };
 
-                optimized_tree.push(embedded_rforest::forest::Node::from_branch(
-                    embedded_rforest::forest::Branch::new(
+                optimized_tree.push(lumberjack_model::forest::Node::from_branch(
+                    lumberjack_model::forest::Branch::new(
                         node.split_with,
                         node.split_at,
                         left,

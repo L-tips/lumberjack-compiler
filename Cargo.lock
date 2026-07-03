@@ -190,15 +190,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "embedded-rforest"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "half",
- "zerocopy",
-]
-
-[[package]]
 name = "equator"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -226,22 +217,6 @@ checksum = "7cd915d99f24784cdc19fd37ef22b97e3ff0ae756c7e492e9fbfe897d61e2aec"
 dependencies = [
  "indenter",
  "once_cell",
-]
-
-[[package]]
-name = "forest-optimizer"
-version = "0.1.0"
-dependencies = [
- "aligned-vec",
- "clap",
- "color-eyre",
- "csv",
- "embedded-rforest",
- "half",
- "serde",
- "serde_json",
- "tap",
- "zerocopy",
 ]
 
 [[package]]
@@ -290,6 +265,31 @@ name = "libc"
 version = "0.2.174"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
+
+[[package]]
+name = "lumberjack-compiler"
+version = "0.1.0"
+dependencies = [
+ "aligned-vec",
+ "clap",
+ "color-eyre",
+ "csv",
+ "half",
+ "lumberjack-model",
+ "serde",
+ "serde_json",
+ "tap",
+ "zerocopy",
+]
+
+[[package]]
+name = "lumberjack-model"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "half",
+ "zerocopy",
+]
 
 [[package]]
 name = "memchr"

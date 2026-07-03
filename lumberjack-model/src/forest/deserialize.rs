@@ -16,8 +16,8 @@ macro_rules! static_storage {
         const BYTES_LEN: usize = include_bytes!($file).len();
 
         $(#[unsafe(link_section = $section)])?
-        static BUF: ::embedded_rforest::forest::deserialize::BackingStorage<BYTES_LEN> =
-            ::embedded_rforest::forest::deserialize::BackingStorage::new(*include_bytes!($file));
+        static BUF: ::lumberjack_model::forest::deserialize::BackingStorage<BYTES_LEN> =
+            ::lumberjack_model::forest::deserialize::BackingStorage::new(*include_bytes!($file));
         BUF.to_slice()
     }};
 }

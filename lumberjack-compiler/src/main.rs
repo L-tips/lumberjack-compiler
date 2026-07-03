@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
 use color_eyre::Result;
-use forest_optimizer::write_forest::write_forest;
+use lumberjack_compiler::write_forest::write_forest;
 
 use std::path::PathBuf;
 
