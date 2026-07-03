@@ -1,9 +1,10 @@
 use aligned_vec::AVec;
 use zerocopy::IntoBytes;
 
-use lumberjack_model::forest::{ALIGNMENT, OptimizedForest};
+use lumberjack_model::model::{ALIGNMENT, Model};
 
-pub fn to_bytes(forest: &OptimizedForest) -> AVec<u8> {
+/// Write the provided model to an aligned byte vector
+pub fn to_bytes(forest: &Model) -> AVec<u8> {
     let mut bytes = AVec::<u8>::with_capacity(ALIGNMENT, 8);
 
     // Number of trees (4 bytes)

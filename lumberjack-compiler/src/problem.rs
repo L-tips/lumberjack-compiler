@@ -3,12 +3,12 @@ use std::{collections::HashMap, fmt::Debug};
 pub type Map = HashMap<String, u16>;
 
 #[derive(Default, Clone, Debug)]
-pub struct Classification {
+pub struct Problem {
     targets: Map,
     features: Map,
 }
 
-impl Classification {
+impl Problem {
     pub fn targets(&self) -> &Map {
         &self.targets
     }

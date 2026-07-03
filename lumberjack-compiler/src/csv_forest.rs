@@ -1,20 +1,25 @@
-use crate::forest::{BranchNode, LeafNode, Node};
-use crate::problem_type::{Classification, Map};
+use crate::forest_model::{BranchNode, LeafNode, Node, Tree};
+use crate::problem::{Map, Problem};
 use std::collections::hash_map::Entry;
 use std::fmt::Debug;
-use std::path::Path;
-use std::{fs, io};
+use std::{
+    fs::File,
+    io::{self, Write},
+    num::NonZeroU16,
+    path::Path,
+};
 
-use color_eyre::Result;
-use color_eyre::eyre::{OptionExt, eyre};
+use color_eyre::eyre::{Context, OptionExt, Result, eyre};
 use half::bf16;
 use serde::{Deserialize, Deserializer};
 
-pub trait NodeType {}
+use lumberjack_model::model::{self, Model};
+
+use crate::{forest_model::ForestModel, serialize::to_bytes};
 
 /// A single node of a [`SerializedForest`] in classification mode
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct CsvNode {
+struct CsvNode {
     /// Tree index. 1-indexed.
     pub tree_idx: usize,
     /// Node index. 1-indexed.
@@ -41,17 +46,17 @@ pub struct CsvNode {
 
 impl CsvNode {
     /// Find the feature ID of this node's split variable
-    pub fn feature_id(&self, features_map: &Map) -> Option<u16> {
+    fn feature_id(&self, features_map: &Map) -> Option<u16> {
         features_map.get(self.split_on.as_ref()?).copied()
     }
 
     /// Find the target ID of this node's prediction
-    pub fn target_id(&self, targets_map: &Map) -> Option<u16> {
+    fn target_id(&self, targets_map: &Map) -> Option<u16> {
         targets_map.get(self.prediction.as_ref()?).copied()
     }
 
     fn deserialize<R: io::Read>(
-        problem: &mut Classification,
+        problem: &mut Problem,
         rdr: &mut csv::Reader<R>,
     ) -> Result<Vec<Self>> {
         let mut feat_count = 0;
@@ -89,7 +94,7 @@ impl CsvNode {
         Ok(nodes)
     }
 
-    pub fn normalize(self, problem: &Classification) -> Result<Node> {
+    fn normalize(self, problem: &Problem) -> Result<Node> {
         if self.split_on.is_some() {
             let branch = BranchNode {
                 split_with: self
@@ -125,11 +130,11 @@ impl CsvNode {
 #[derive(Debug)]
 pub struct CsvForest {
     nodes: Vec<CsvNode>,
-    problem: Classification,
+    problem: Problem,
 }
 
 impl CsvForest {
-    pub fn problem(&self) -> &Classification {
+    pub fn problem(&self) -> &Problem {
         &self.problem
     }
 
@@ -138,29 +143,122 @@ impl CsvForest {
         self.problem.features()
     }
 
-    pub fn nodes(&self) -> &[CsvNode] {
+    fn nodes(&self) -> &[CsvNode] {
         &self.nodes
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
-        let rdr = fs::File::open(path.as_ref())?;
+        let rdr = File::open(path.as_ref())?;
         let mut rdr = csv::ReaderBuilder::new()
             .comment(Some(b'#'))
             .from_reader(rdr);
 
-        let mut problem = Classification::default();
+        let mut problem = Problem::default();
 
         let nodes = CsvNode::deserialize(&mut problem, &mut rdr)?;
 
         Ok(CsvForest { nodes, problem })
     }
-}
 
-impl CsvForest {
     /// Get the targets of this forest
     pub fn targets(&self) -> &Map {
         self.problem.targets()
     }
+
+    /// Convert a [`SerializedForest`] into a [`Forest`].
+    ///
+    /// In practice, this method flattens the nodes, putting all tree roots in
+    /// front of the array.
+    pub fn into_forest_model(self) -> Result<ForestModel> {
+        let problem = self.problem();
+
+        // Find all nodes which have an index of 1. These are our tree roots.
+        let mut tree_roots: Vec<_> = self
+            .nodes()
+            .iter()
+            .filter_map(|n| {
+                if n.node_idx() == 1 {
+                    Some(n.tree_idx())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        tree_roots.sort();
+
+        // Check that all tree roots are numbered sequentially
+        assert!(
+            tree_roots.iter().enumerate().all(|(i, &v)| v == i + 1),
+            "Mismatch within tree indices"
+        );
+
+        // Create an array with enough space for all our trees
+        let mut trees = Vec::with_capacity(tree_roots.len());
+
+        // Descend into each tree and create the array structure
+        for i in 0..tree_roots.len() {
+            let tree_idx = i + 1;
+
+            // Collect just the nodes belonging to this tree, and place them in order
+            let tree_nodes = {
+                let mut nodes = self
+                    .nodes()
+                    .iter()
+                    .filter_map(|n| {
+                        if n.tree_idx() == tree_idx {
+                            Some((n.node_idx(), n.clone().normalize(problem)))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                nodes.sort_by_key(|(a, _)| *a);
+                nodes
+                    .into_iter()
+                    .map(|(_, n)| n)
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+
+            trees.push(Tree::new(tree_nodes));
+        }
+
+        Ok(ForestModel::new(trees, self.problem().clone()))
+    }
+}
+
+/// Takes a path to a file containing a model using the CSV specification, and
+/// writes a compiled model to the output path.
+pub fn compile_from_csv(input: impl AsRef<Path>, output: impl AsRef<Path>) -> Result<()> {
+    // Read the input file
+    let serialized =
+        CsvForest::read(input).context("Could not read forest definition file (CSV).")?;
+    let forest = serialized.into_forest_model()?;
+
+    // Optimize the forest
+    let nodes = forest.compile();
+    let optimized = Model::new(
+        forest.num_trees().try_into().unwrap(),
+        &nodes,
+        NonZeroU16::new(
+            forest
+                .num_features()
+                .try_into()
+                .expect("Features must fit into an u16."),
+        )
+        .expect("Number of features must be non-zero."),
+        model::Classification::new(forest.num_targets().try_into().unwrap()).unwrap(),
+    )
+    .map_err(|_| eyre!("Malformed forest"))?;
+
+    let serialized = to_bytes(&optimized);
+    let ptr = serialized.as_ptr();
+    assert!((ptr as usize).is_multiple_of(align_of_val(&optimized)));
+
+    // Write the transformed data to the output file
+    let mut output_file = File::create(output).context("Could not create output file")?;
+    output_file.write_all(&serialized)?;
+
+    Ok(())
 }
 
 /// Deserialize a string into an `Option<String>`, returning `None` if the

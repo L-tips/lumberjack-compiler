@@ -1,49 +1,13 @@
 use core::num::NonZeroU16;
-use core::ops::Deref;
 
 use zerocopy::{byteorder::little_endian::U32, little_endian::U16};
 
 use crate::{
     Error,
-    forest::{ALIGNMENT, Node},
+    model::{ALIGNMENT, Branch, Model, Node},
 };
 
-use super::{Branch, OptimizedForest};
-
-#[macro_export]
-macro_rules! static_storage {
-    ($file:expr $(, unsafe(link_section = $section:literal))?) => {{
-        const BYTES_LEN: usize = include_bytes!($file).len();
-
-        $(#[unsafe(link_section = $section)])?
-        static BUF: ::lumberjack_model::forest::deserialize::BackingStorage<BYTES_LEN> =
-            ::lumberjack_model::forest::deserialize::BackingStorage::new(*include_bytes!($file));
-        BUF.to_slice()
-    }};
-}
-
-#[repr(align(16))]
-pub struct BackingStorage<const N: usize>([u8; N]);
-
-impl<const N: usize> BackingStorage<N> {
-    pub const fn new(buf: [u8; N]) -> Self {
-        Self(buf)
-    }
-
-    pub const fn to_slice(&self) -> &[u8] {
-        self.0.as_slice()
-    }
-}
-
-impl<const N: usize> Deref for BackingStorage<N> {
-    type Target = [u8; N];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<'a> OptimizedForest<'a> {
+impl<'a> Model<'a> {
     pub fn deserialize(buffer: &'a [u8]) -> Result<Self, Error> {
         let base_ptr = buffer.as_ptr();
 
@@ -91,7 +55,7 @@ impl<'a> OptimizedForest<'a> {
 
             let nodes = core::slice::from_raw_parts(slice_ptr, slice_len);
 
-            Ok(OptimizedForest {
+            Ok(Model {
                 num_trees,
                 num_features,
                 num_targets,

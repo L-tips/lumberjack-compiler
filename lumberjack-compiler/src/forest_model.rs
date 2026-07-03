@@ -1,15 +1,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
-use color_eyre::Result;
 use half::bf16;
-use lumberjack_model::forest::{PADDING, TreeHeader};
+use lumberjack_model::model::{PADDING, TreeHeader};
 use tap::Tap;
 
-use crate::{
-    csv_forest::CsvForest,
-    problem_type::{Classification, Map},
-};
+use crate::problem::{Map, Problem};
 
 #[derive(Debug, Clone)]
 pub struct BranchNode {
@@ -76,7 +72,7 @@ impl fmt::Display for Node {
 }
 
 #[derive(Debug, Clone)]
-struct Tree {
+pub(crate) struct Tree {
     nodes: Vec<Node>,
 }
 
@@ -106,78 +102,19 @@ impl fmt::Display for Tree {
 
 /// An array-backed, non-optimized random forest model
 #[derive(Debug)]
-pub struct Forest {
+pub struct ForestModel {
     trees: Vec<Tree>,
-    problem: Classification,
+    problem: Problem,
 }
 
-impl Forest {
-    /// Convert a [`SerializedForest`] into a [`Forest`].
-    ///
-    /// In practice, this method flattens the nodes, putting all tree roots in
-    /// front of the array.
-    pub fn from_serialized(serialized: CsvForest) -> Result<Self> {
-        let problem = serialized.problem();
-
-        // Find all nodes which have an index of 1. These are our tree roots.
-        let mut tree_roots: Vec<_> = serialized
-            .nodes()
-            .iter()
-            .filter_map(|n| {
-                if n.node_idx() == 1 {
-                    Some(n.tree_idx())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        tree_roots.sort();
-
-        // Check that all tree roots are numbered sequentially
-        assert!(
-            tree_roots.iter().enumerate().all(|(i, &v)| v == i + 1),
-            "Mismatch within tree indices"
-        );
-
-        // Create an array with enough space for all our trees
-        let mut trees = Vec::with_capacity(tree_roots.len());
-
-        // Descend into each tree and create the array structure
-        for i in 0..tree_roots.len() {
-            let tree_idx = i + 1;
-
-            // Collect just the nodes belonging to this tree, and place them in order
-            let tree_nodes = {
-                let mut nodes = serialized
-                    .nodes()
-                    .iter()
-                    .filter_map(|n| {
-                        if n.tree_idx() == tree_idx {
-                            Some((n.node_idx(), n.clone().normalize(problem)))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                nodes.sort_by_key(|(a, _)| *a);
-                nodes
-                    .into_iter()
-                    .map(|(_, n)| n)
-                    .collect::<Result<Vec<_>, _>>()?
-            };
-
-            trees.push(Tree::new(tree_nodes));
-        }
-
-        Ok(Self {
-            trees,
-            problem: serialized.problem().clone(),
-        })
+impl ForestModel {
+    pub(crate) fn new(trees: Vec<Tree>, problem: Problem) -> Self {
+        Self { trees, problem }
     }
 
-    /// Turn this [`Forest`] into an
-    /// [`OptimizedForest`](lumberjack_model::forest::OptimizedForest).
-    pub fn optimize_nodes(&self) -> Vec<lumberjack_model::forest::Node> {
+    /// Turn this [`ForestModel`] into a
+    /// [`Model`](lumberjack_model::model::Model).
+    pub fn compile(&self) -> Vec<lumberjack_model::model::Node> {
         let max_forest_len = self.trees.iter().map(|t| t.nodes.len()).sum();
         let mut forest_nodes = Vec::with_capacity(max_forest_len);
 
@@ -313,7 +250,7 @@ impl Forest {
 
             // Add header + padding at beginning
             optimized_tree.extend([
-                lumberjack_model::forest::Node::from_header(TreeHeader::new(tree_len, 2)),
+                lumberjack_model::model::Node::from_header(TreeHeader::new(tree_len, 2)),
                 PADDING,
             ]);
 
@@ -328,8 +265,8 @@ impl Forest {
                     Branch::Prediction(p) => p,
                 };
 
-                optimized_tree.push(lumberjack_model::forest::Node::from_branch(
-                    lumberjack_model::forest::Branch::new(
+                optimized_tree.push(lumberjack_model::model::Node::from_branch(
+                    lumberjack_model::model::Branch::new(
                         node.split_with,
                         node.split_at,
                         left,
@@ -357,9 +294,7 @@ impl Forest {
     pub fn num_features(&self) -> usize {
         self.problem.features().len()
     }
-}
 
-impl Forest {
     pub fn num_targets(&self) -> usize {
         self.problem.targets().len()
     }
@@ -372,7 +307,7 @@ impl Forest {
         self.problem.features()
     }
 
-    /// Make a prediction based on input values (features)
+    /// Make a prediction based on input feature vector
     pub fn predict(&self, features: &[bf16]) -> String {
         // Reserve space to store each tree's prediction
         let mut results = Vec::with_capacity(self.num_trees());
@@ -422,7 +357,7 @@ impl Forest {
     }
 }
 
-impl fmt::Display for Forest {
+impl fmt::Display for ForestModel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,

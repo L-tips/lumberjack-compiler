@@ -1,6 +1,10 @@
 #![no_std]
 
-pub mod forest;
+pub mod model;
+pub mod storage;
+
+pub use model::Model;
+pub use storage::BackingStorage;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {

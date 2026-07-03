@@ -3,12 +3,12 @@ use std::path::Path;
 use color_eyre::Result;
 
 use lumberjack_compiler::csv_forest::CsvForest;
-use lumberjack_compiler::forest::Forest;
+use lumberjack_compiler::forest_model::ForestModel;
 use serde::de::DeserializeOwned;
 
-pub fn get_forest(path: impl AsRef<Path>) -> Result<Forest> {
+pub fn get_forest(path: impl AsRef<Path>) -> Result<ForestModel> {
     let serialized = CsvForest::read(path.as_ref())?;
-    Forest::from_serialized(serialized)
+    serialized.into_forest_model()
 }
 
 pub fn get_test_data<T: DeserializeOwned>(path: impl AsRef<Path>) -> Result<Vec<T>> {

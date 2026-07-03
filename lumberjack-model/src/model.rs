@@ -196,7 +196,7 @@ impl Node {
 /// An array-backed, optimized random forest model
 #[repr(C, align(16))]
 #[derive(TryFromBytes, KnownLayout, Immutable)]
-pub struct OptimizedForest<'data> {
+pub struct Model<'data> {
     num_trees: U32,
     num_features: U16,
     /// If num_targets is Some, we have a classification problem.
@@ -206,7 +206,7 @@ pub struct OptimizedForest<'data> {
     nodes: &'data [Node],
 }
 
-impl<'data> OptimizedForest<'data> {
+impl<'data> Model<'data> {
     pub fn new(
         num_trees: u32,
         nodes: &'data [Node],
@@ -386,7 +386,7 @@ impl<'a> Iterator for HeadersIterator<'a> {
     }
 }
 
-impl fmt::Display for OptimizedForest<'_> {
+impl fmt::Display for Model<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,

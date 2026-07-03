@@ -1,15 +1,8 @@
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use color_eyre::Result;
-use lumberjack_compiler::write_forest::write_forest;
+use lumberjack_compiler::csv_forest::compile_from_csv;
 
 use std::path::PathBuf;
-
-/// Modes for the application
-#[derive(Debug, Clone, ValueEnum)]
-enum ProblemType {
-    Classification,
-    Regression,
-}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -27,5 +20,5 @@ fn main() -> Result<()> {
     color_eyre::install()?;
     let args = Cli::parse();
 
-    write_forest(args.input, args.output)
+    compile_from_csv(args.input, args.output)
 }

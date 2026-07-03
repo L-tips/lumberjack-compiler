@@ -2,7 +2,7 @@ use std::num::NonZeroU16;
 
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
-use lumberjack_model::forest::{Classification, OptimizedForest};
+use lumberjack_model::model::{Classification, Model};
 
 use crate::datasets::iris;
 use crate::helpers::{get_forest, get_test_data};
@@ -22,11 +22,11 @@ fn verify_regular_forest_accuracy_iris_800_trees() -> Result<()> {
 }
 
 #[test]
-fn verify_optimized_forest_accuracy_iris_880_trees() -> Result<()> {
+fn verify_optimized_forest_accuracy_iris_800_trees() -> Result<()> {
     let forest = get_forest("./tests/test-forests/forest_iris_800.csv")?;
 
-    let nodes = forest.optimize_nodes();
-    let optimized = OptimizedForest::new(
+    let nodes = forest.compile();
+    let optimized = Model::new(
         forest.num_trees().try_into().unwrap(),
         &nodes,
         NonZeroU16::new(forest.num_features().try_into().unwrap()).unwrap(),
