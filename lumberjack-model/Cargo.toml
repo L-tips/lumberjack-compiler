@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 
 half = { workspace = true }
+phf = { workspace = true }
 zerocopy = { workspace = true }
 
 [dev-dependencies]

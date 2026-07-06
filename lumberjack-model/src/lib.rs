@@ -1,5 +1,7 @@
 #![no_std]
 
+pub use phf;
+
 pub mod model;
 pub mod storage;
 
