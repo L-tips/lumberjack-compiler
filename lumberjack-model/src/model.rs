@@ -293,6 +293,9 @@ impl<'data> Model<'data> {
         HeadersIterator::new(self.nodes, self.num_trees.get() as _)
     }
 
+    /// Perform a prediction with the given features vector.
+    ///
+    /// In case of a tie, the class with the lowest index wins.
     #[inline(never)]
     pub fn predict(&self, features: &[bf16]) -> PredictionOutput {
         const MAX_NUM_TREES: usize = 255;
@@ -329,10 +332,17 @@ impl<'data> Model<'data> {
             *vote += 1;
         }
 
+        #[cfg(feature = "std")]
+        println!("votes: {votes:?}");
+
+        // Select the class with the highest votes, preferring the lowest class index in
+        // case of a tie
         votes
             .into_iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.cmp(b))
+            .max_by(|(idx_a, votes_a), (idx_b, votes_b)| {
+                votes_a.cmp(votes_b).then_with(|| idx_b.cmp(idx_a))
+            })
             .unwrap()
             .0
             .try_into()

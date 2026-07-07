@@ -3,10 +3,10 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use lumberjack_compiler::csv_forest::CsvForest;
+use lumberjack_compiler::problem::Map;
 use lumberjack_compiler::serialize::to_bytes;
 use lumberjack_model::model::{Classification, Model};
 use proc_macro::TokenStream;
-use proc_macro2::Literal;
 use proc_macro2::Span;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -26,12 +26,12 @@ macro_rules! yeet_syn_err {
 }
 
 #[non_exhaustive]
-struct MacroInput {
+struct CompileInput {
     path: PathBuf,
     section: Option<String>,
 }
 
-impl Parse for MacroInput {
+impl Parse for CompileInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let path: LitStr = input.parse()?;
         let path = resolve_manifest_relative_path(&path)?;
@@ -49,15 +49,51 @@ impl Parse for MacroInput {
     }
 }
 
+struct VectorInput {
+    vectors_path: PathBuf,
+    model_path: PathBuf,
+}
+
+impl Parse for VectorInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let vectors_path = input.parse::<LitStr>()?;
+        let vectors_path = resolve_manifest_relative_path(&vectors_path)?;
+        input.parse::<Token![,]>()?;
+        let model_path: LitStr = input.parse::<LitStr>()?;
+        let model_path = resolve_manifest_relative_path(&model_path)?;
+
+        Ok(Self {
+            vectors_path,
+            model_path,
+        })
+    }
+}
+
+trait MapSynErr<T, E: Debug> {
+    fn map_syn_err<O>(self, op: O) -> syn::Result<T>
+    where
+        O: Fn(&E) -> String;
+}
+
+impl<T, E: Debug> MapSynErr<T, E> for Result<T, E> {
+    fn map_syn_err<O>(self, op: O) -> syn::Result<T>
+    where
+        O: Fn(&E) -> String,
+    {
+        self.map_err(|e| syn::Error::new(Span::call_site(), format!("{}: {e:?}", op(&e))))
+    }
+}
+
 /// Include an already-built RF moodel in the `.rforest` format as an `&'static
-/// [u8]`.
+/// [u8]`. Note that converting a CSV model to a `.rforest` is lossy, and cannot
+/// be used to generate feature and class maps.
 #[proc_macro]
 pub fn include_rf_model(input: TokenStream) -> TokenStream {
-    let MacroInput { path, section, .. } = parse_macro_input!(input as MacroInput);
+    let CompileInput { path, section, .. } = parse_macro_input!(input as CompileInput);
     let section = section.as_deref();
 
     let bytes = yeet_syn_err!(
-        std::fs::read(&path).map_syn_err(format!("Could not read model: {}", path.display()))
+        std::fs::read(&path).map_syn_err(|_| format!("Could not read model: {}", path.display()))
     );
     let bytes_len = bytes.len();
     let link_section = section.map(|s| {
@@ -79,43 +115,53 @@ pub fn include_rf_model(input: TokenStream) -> TokenStream {
 /// Build a RF moodel from a CSV spec, and include it in the `.rforest` format
 /// as an `&'static [u8]`.
 #[proc_macro]
-pub fn build_rf_model(input: TokenStream) -> TokenStream {
-    let MacroInput { path, section, .. } = parse_macro_input!(input as MacroInput);
+pub fn compile_model(input: TokenStream) -> TokenStream {
+    let CompileInput { path, section, .. } = parse_macro_input!(input as CompileInput);
     let section = section.as_deref();
-    yeet_syn_err!(build_rf_model_from_csv(path, section)).into()
+    yeet_syn_err!(compile_model_from_csv(path, section)).into()
 }
 
-/// Include feature vectors from a CSV file as a `&'static [&[bf16]]`.
+/// Build a a slice of features from a CSV forest spec as a `&'static [&str]`,
+/// where each feature name is at its index in the slice.
 #[proc_macro]
-pub fn include_feat_vectors(input: TokenStream) -> TokenStream {
-    let MacroInput { path, .. } = parse_macro_input!(input as MacroInput);
-    let res = yeet_syn_err!(read_test_vectors(&path));
+pub fn features_map(input: TokenStream) -> TokenStream {
+    let CompileInput { path, .. } = parse_macro_input!(input as CompileInput);
+    yeet_syn_err!(build_map(path, CsvForest::features)).into()
+}
+
+/// Build a a slice of targets from a CSV forest spec as a `&'static [&str]`,
+/// where each target name is at its index in the slice.
+#[proc_macro]
+pub fn targets_map(input: TokenStream) -> TokenStream {
+    let CompileInput { path, .. } = parse_macro_input!(input as CompileInput);
+    yeet_syn_err!(build_map(path, CsvForest::targets)).into()
+}
+
+/// Include feature vectors with targets from a CSV file as a `&'static
+/// [(&[bf16], u16)]`.
+///
+/// The CSV must include a column named "prediction", containing the predicted
+/// class from the model.
+#[proc_macro]
+pub fn feat_vectors(input: TokenStream) -> TokenStream {
+    let VectorInput {
+        vectors_path,
+        model_path,
+    } = parse_macro_input!(input as VectorInput);
+
+    let res = yeet_syn_err!(build_feat_vectors(&vectors_path, &model_path));
 
     res.into()
 }
 
-trait MapSynErr<T, E: Debug> {
-    fn map_syn_err(self, message: impl AsRef<str>) -> syn::Result<T>;
-}
-
-impl<T, E: Debug> MapSynErr<T, E> for Result<T, E> {
-    fn map_syn_err(self, message: impl AsRef<str>) -> syn::Result<T> {
-        self.map_err(|e| syn::Error::new(Span::call_site(), format!("{}: {e:?}", message.as_ref())))
-    }
-}
-
-fn build_rf_model_from_csv<P: AsRef<Path> + Clone>(
-    model_path: P,
+fn compile_model_from_csv(
+    model_path: impl AsRef<Path>,
     section: Option<&str>,
 ) -> syn::Result<TokenStream2> {
-    // Read the input file
-    let serialized = CsvForest::read(model_path.clone()).map_syn_err(format!(
-        "Could not read forest definition file (CSV) at {})",
-        model_path.as_ref().display()
-    ))?;
-    let forest = serialized
+    let csv_forest = read_csv_model(model_path)?;
+    let forest = csv_forest
         .into_forest_model()
-        .map_syn_err("Could not deserialize the CSV forest")?;
+        .map_syn_err(|_| "Could not deserialize the CSV forest".to_owned())?;
 
     // Optimize the forest
     let nodes = forest.compile();
@@ -126,13 +172,13 @@ fn build_rf_model_from_csv<P: AsRef<Path> + Clone>(
             forest
                 .num_features()
                 .try_into()
-                .map_syn_err("Number of forest features must fit into a u16")?,
+                .map_syn_err(|_| "Number of forest features must fit into a u16".to_owned())?,
         )
         .ok_or("Zero features")
-        .map_syn_err("Number of features must be non-zero.")?,
+        .map_syn_err(|_| "Number of features must be non-zero.".to_owned())?,
         Classification::new(forest.num_targets().try_into().unwrap()).unwrap(),
     )
-    .map_syn_err("Malformed forest")?;
+    .map_syn_err(|_| "Malformed forest".to_owned())?;
 
     let serialized = to_bytes(&optimized);
 
@@ -154,49 +200,38 @@ fn build_rf_model_from_csv<P: AsRef<Path> + Clone>(
     })
 }
 
-fn read_test_vectors(data_path: impl AsRef<Path>) -> syn::Result<TokenStream2> {
-    let mut rdr = csv::ReaderBuilder::new()
-        .from_path(data_path.as_ref())
-        .map_syn_err(format!(
-            "failed to open CSV: {}",
-            data_path.as_ref().display()
-        ))?;
+fn build_map(
+    model_path: impl AsRef<Path>,
+    f: impl Fn(&CsvForest) -> &Map,
+) -> syn::Result<TokenStream2> {
+    let csv_forest = read_csv_model(model_path)?;
+    let mut items = f(&csv_forest).iter().collect::<Vec<_>>();
+    items.sort_by_key(|(_, idx)| *idx);
+    let items = items.iter().map(|f| f.0);
 
-    let mut rows: Vec<Vec<f32>> = Vec::new();
+    Ok(quote! {
+        &[
+            #(#items,)*
+        ]
+    })
+}
 
-    for record in rdr.records() {
-        let record = record.map_syn_err("bad CSV row")?;
-        let row: Vec<f32> = record
-            .iter()
-            .map(|v| v.parse::<f32>().expect("invalid float"))
-            .collect();
-        rows.push(row);
-    }
+fn build_feat_vectors(
+    vectors_path: impl AsRef<Path>,
+    model_path: impl AsRef<Path>,
+) -> syn::Result<TokenStream2> {
+    let model = read_csv_model(model_path)?;
 
-    if rows.is_empty() {
-        return Err(syn::Error::new(
-            Span::call_site(),
-            "sample CSV must contain at least one row",
-        ));
-    }
+    let rows = model
+        .problem()
+        .features_vector_from_csv(vectors_path)
+        .map_syn_err(|e| format!("Cannot read CSV: {e}"))?;
 
-    let cols = rows[0].len();
-    for (idx, r) in rows.iter().enumerate() {
-        if r.len() != cols {
-            return Err(syn::Error::new(
-                Span::call_site(),
-                format!(
-                    "ragged CSV not supported: row {idx} has {} cols, expected {cols}",
-                    r.len()
-                ),
-            ));
-        }
-    }
+    let row_tokens = rows.iter().map(|(features, prediction)| {
+        let vals = features.iter().map(|v| v.to_f32());
 
-    let row_tokens = rows.iter().map(|row| {
-        let vals = row.iter().map(|v| Literal::f32_suffixed(*v));
         quote! {
-            &[ #(::ibex_demo_system_hal::half::bf16::from_f32_const(#vals)),* ]
+            (&[ #(::ibex_demo_system_hal::half::bf16::from_f32_const(#vals)),* ], #prediction)
         }
     });
 
@@ -204,15 +239,24 @@ fn read_test_vectors(data_path: impl AsRef<Path>) -> syn::Result<TokenStream2> {
         &[ #(#row_tokens),* ]
     })
 }
-
 fn resolve_manifest_relative_path(lit: &LitStr) -> syn::Result<PathBuf> {
     let value = lit.value();
     let rel = Path::new(&value);
 
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .map_syn_err("CARGO_MANIFEST_DIR is not set in proc-macro expansion environment")?;
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").map_syn_err(|_| {
+        "CARGO_MANIFEST_DIR is not set in proc-macro expansion environment".to_owned()
+    })?;
 
     let mut abs = PathBuf::from(manifest_dir);
     abs.push(rel);
     Ok(abs)
+}
+
+fn read_csv_model(model_path: impl AsRef<Path>) -> syn::Result<CsvForest> {
+    CsvForest::read(model_path.as_ref()).map_syn_err(|_| {
+        format!(
+            "Could not read forest definition file (CSV) at {})",
+            model_path.as_ref().display(),
+        )
+    })
 }

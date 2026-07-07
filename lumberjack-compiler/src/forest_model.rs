@@ -307,6 +307,10 @@ impl ForestModel {
         self.problem.features()
     }
 
+    pub fn problem(&self) -> &Problem {
+        &self.problem
+    }
+
     /// Make a prediction based on input feature vector
     pub fn predict(&self, features: &[bf16]) -> String {
         // Reserve space to store each tree's prediction
@@ -343,14 +347,18 @@ impl ForestModel {
         }
 
         let best_result = votes
-            .into_iter()
-            .max_by_key(|&(_, count)| count)
+            .iter()
+            .max_by(|(idx_a, votes_a), (idx_b, votes_b)| {
+                votes_a.cmp(votes_b).then_with(|| idx_b.cmp(idx_a))
+            })
             .map(|(num, _)| num)
             .unwrap();
 
+        println!("votes: {votes:?}");
+
         self.targets()
             .iter()
-            .find(|(_, t)| **t == best_result)
+            .find(|(_, t)| *t == best_result)
             .unwrap()
             .0
             .clone()

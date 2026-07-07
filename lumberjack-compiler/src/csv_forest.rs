@@ -1,6 +1,5 @@
 use crate::forest_model::{BranchNode, LeafNode, Node, Tree};
 use crate::problem::{Map, Problem};
-use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::{
     fs::File,
@@ -11,6 +10,7 @@ use std::{
 
 use color_eyre::eyre::{Context, OptionExt, Result, eyre};
 use half::bf16;
+use indexmap::map::Entry;
 use serde::{Deserialize, Deserializer};
 
 use lumberjack_model::model::{self, Model};
@@ -148,7 +148,8 @@ impl CsvForest {
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
-        let rdr = File::open(path.as_ref())?;
+        let rdr =
+            File::open(path.as_ref()).context(format!("path: {}", path.as_ref().display()))?;
         let mut rdr = csv::ReaderBuilder::new()
             .comment(Some(b'#'))
             .from_reader(rdr);
@@ -156,7 +157,6 @@ impl CsvForest {
         let mut problem = Problem::default();
 
         let nodes = CsvNode::deserialize(&mut problem, &mut rdr)?;
-
         Ok(CsvForest { nodes, problem })
     }
 

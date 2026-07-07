@@ -11,3 +11,6 @@ zerocopy = { workspace = true }
 
 [dev-dependencies]
 anyhow = "1.0.91"
+
+[features]
+std = []

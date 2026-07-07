@@ -5,8 +5,7 @@ use color_eyre::eyre::eyre;
 use lumberjack_compiler::serialize::to_bytes;
 use lumberjack_model::model::{Classification, Model};
 
-use crate::datasets::iris;
-use crate::helpers::{get_forest, get_test_data};
+use crate::helpers::get_forest;
 
 #[test]
 fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> {
@@ -28,13 +27,13 @@ fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> 
     let serialized = to_bytes(&optimized);
     let optimized = Model::deserialize(&serialized).map_err(|e| eyre!("Malfomed forest: {e:?}"))?;
 
-    let test_data: Vec<iris::DataPoint> = get_test_data("./tests/test-data/iris.csv")?;
+    let test_data = forest
+        .problem()
+        .features_vector_from_csv("./tests/test-data/iris.csv")?;
 
-    for data_point in test_data {
-        let features = data_point.transform_features(forest.features());
+    for (features, target_prediction) in test_data {
         let prediction = optimized.predict(&features);
-        let target = forest.targets().get(&data_point.forest_prediction).unwrap();
-        assert_eq!(prediction, *target);
+        assert_eq!(prediction, target_prediction);
     }
 
     Ok(())
@@ -53,13 +52,13 @@ fn classification_static_storage_deserializes_correctly() -> Result<()> {
         .verify()
         .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
 
-    let test_data: Vec<iris::DataPoint> = get_test_data("./tests/test-data/iris.csv")?;
+    let test_data = forest
+        .problem()
+        .features_vector_from_csv("./tests/test-data/iris.csv")?;
 
-    for data_point in test_data {
-        let features = data_point.transform_features(forest.features());
+    for (features, target_prediction) in test_data {
         let prediction = deserialized.predict(&features);
-        let target = forest.targets().get(&data_point.forest_prediction).unwrap();
-        assert_eq!(prediction, *target);
+        assert_eq!(prediction, target_prediction);
     }
 
     Ok(())
