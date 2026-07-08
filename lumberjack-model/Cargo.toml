@@ -4,13 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-
 half = { workspace = true }
 phf = { workspace = true }
 zerocopy = { workspace = true }
+
+bytesize = { version = "2.4", default-features = false, optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.91"
 
 [features]
-std = []
+std = ["dep:bytesize"]

@@ -34,11 +34,11 @@ fn compiled_model_accuracy_iris_800_trees() -> Result<()> {
         NonZeroU16::new(forest.num_features().try_into().unwrap()).unwrap(),
         Classification::new(forest.num_targets().try_into().unwrap()).unwrap(),
     )
-    .map_err(|_| eyre!("Malformed forest"))?;
+    .map_err(|e| eyre!("Malformed forest: {e:?}"))?;
 
     optimized
         .verify()
-        .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
+        .map_err(|e| eyre!("Malformed forest detected upon verification: {e:?}"))?;
 
     let test_data = forest
         .problem()

@@ -228,7 +228,11 @@ impl CsvForest {
 
 /// Takes a path to a file containing a model using the CSV specification, and
 /// writes a compiled model to the output path.
-pub fn compile_from_csv(input: impl AsRef<Path>, output: impl AsRef<Path>) -> Result<()> {
+pub fn compile_from_csv(
+    input: impl AsRef<Path>,
+    output: impl AsRef<Path>,
+    analyze: Option<Option<usize>>,
+) -> Result<()> {
     // Read the input file
     let serialized =
         CsvForest::read(input).context("Could not read forest definition file (CSV).")?;
@@ -236,7 +240,7 @@ pub fn compile_from_csv(input: impl AsRef<Path>, output: impl AsRef<Path>) -> Re
 
     // Optimize the forest
     let nodes = forest.compile();
-    let optimized = Model::new(
+    let compiled = Model::new(
         forest.num_trees().try_into().unwrap(),
         &nodes,
         NonZeroU16::new(
@@ -250,9 +254,13 @@ pub fn compile_from_csv(input: impl AsRef<Path>, output: impl AsRef<Path>) -> Re
     )
     .map_err(|_| eyre!("Malformed forest"))?;
 
-    let serialized = to_bytes(&optimized);
+    if let Some(cells) = analyze {
+        compiled.analyze(cells);
+    }
+
+    let serialized = to_bytes(&compiled);
     let ptr = serialized.as_ptr();
-    assert!((ptr as usize).is_multiple_of(align_of_val(&optimized)));
+    assert!((ptr as usize).is_multiple_of(align_of_val(&compiled)));
 
     // Write the transformed data to the output file
     let mut output_file = File::create(output).context("Could not create output file")?;

@@ -18,4 +18,5 @@ indexmap = "2.14.0"
 
 [dependencies.lumberjack-model]
 path = "../lumberjack-model"
+features = ["std"]
 
