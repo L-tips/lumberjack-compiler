@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 use lumberjack_compiler::csv_forest::CsvForest;
 use lumberjack_compiler::problem::Map;
-use lumberjack_compiler::serialize::to_bytes;
 use lumberjack_model::model::{Classification, Model};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -165,7 +164,7 @@ fn compile_model_from_csv(
 
     // Optimize the forest
     let nodes = forest.compile();
-    let optimized = Model::new(
+    let compiled = Model::new(
         forest.num_trees().try_into().unwrap(),
         &nodes,
         NonZeroU16::new(
@@ -180,7 +179,7 @@ fn compile_model_from_csv(
     )
     .map_syn_err(|_| "Malformed forest".to_owned())?;
 
-    let serialized = to_bytes(&optimized);
+    let serialized = compiled.serialize();
 
     let bytes = serialized.iter();
     let bytes_len = bytes.len();

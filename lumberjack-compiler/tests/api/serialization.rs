@@ -2,7 +2,6 @@ use std::num::NonZeroU16;
 
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
-use lumberjack_compiler::serialize::to_bytes;
 use lumberjack_model::model::{Classification, Model};
 
 use crate::helpers::get_forest;
@@ -12,7 +11,7 @@ fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> 
     let forest = get_forest("./tests/test-forests/forest_iris_5.csv")?;
 
     let nodes = forest.compile();
-    let optimized = Model::new(
+    let compiled = Model::new(
         forest.num_trees().try_into().unwrap(),
         &nodes,
         NonZeroU16::new(forest.num_features().try_into().unwrap()).unwrap(),
@@ -20,11 +19,11 @@ fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> 
     )
     .map_err(|_| eyre!("Malformed forest"))?;
 
-    optimized
+    compiled
         .verify()
         .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
 
-    let serialized = to_bytes(&optimized);
+    let serialized = compiled.serialize();
     let optimized = Model::deserialize(&serialized).map_err(|e| eyre!("Malfomed forest: {e:?}"))?;
 
     let test_data = forest

@@ -3,7 +3,7 @@ use color_eyre::{
     Result,
     eyre::{Context, eyre},
 };
-use lumberjack_compiler::csv_forest::compile_from_csv;
+use lumberjack_compiler::{compiled_model, csv_forest::compile_from_csv};
 use lumberjack_model::Model;
 
 use std::{
@@ -27,7 +27,7 @@ enum Command {
 
         /// Path where the compiled model will be written to
         #[arg(short = 'o', long = "output", value_name = "OUTPUT_FILE")]
-        output: PathBuf,
+        output: Option<PathBuf>,
 
         /// Also output analysis information about the compiled model to stdout
         #[arg(short = 'a', long = "analyze")]
@@ -79,7 +79,7 @@ fn main() -> Result<()> {
             let model = Model::deserialize(&buf)
                 .map_err(|e| eyre!("Could not deserialize compiled model: {e:?}"))?;
 
-            model.analyze(num_cells);
+            compiled_model::analyze(&model, num_cells);
         }
     }
 

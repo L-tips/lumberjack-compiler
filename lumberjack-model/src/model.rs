@@ -10,6 +10,8 @@ use zerocopy::{
 use crate::Error;
 
 pub mod deserialize;
+#[cfg(feature = "std")]
+pub mod serialize;
 
 pub const ALIGNMENT: usize = 16;
 pub(crate) type NodePointer = zerocopy::little_endian::U16;
@@ -163,7 +165,7 @@ impl fmt::Display for Branch {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, IntoBytes, KnownLayout, Immutable, FromBytes)]
+#[derive(Clone, IntoBytes, KnownLayout, Immutable, FromBytes, Debug)]
 pub struct Node([u8; 8]);
 
 pub const PADDING: Node = Node([0; 8]);
@@ -292,7 +294,7 @@ impl<'data> Model<'data> {
     /// Return an iterator which yields the indices of all tree headers in this
     /// forest
     pub fn tree_headers(&self) -> HeadersIterator<'_> {
-        HeadersIterator::new(self.nodes, self.num_trees.get() as _)
+        HeadersIterator::new(self.nodes)
     }
 
     /// Perform a prediction with the given features vector.
@@ -349,124 +351,27 @@ impl<'data> Model<'data> {
     }
 
     /// Get the tree's nodes and header
-    fn get_tree(&self, header_idx: usize) -> (&TreeHeader, &[Node]) {
+    pub fn get_tree(&self, header_idx: usize) -> (&TreeHeader, &[Node]) {
         let header = self.nodes[header_idx].as_header();
 
         let last_node_idx = header_idx + header.tree_len as usize - 1;
         (header, &self.nodes[header_idx..=last_node_idx])
-    }
-
-    /// Perform an analysis of the model, and return some useful metrics.
-    ///
-    /// The function takes a number of cells as an optional parameter. If set,
-    /// will also info about the cell utilization.
-    #[cfg(feature = "std")]
-    pub fn analyze(&self, num_cells: Option<usize>) {
-        use bytesize::ByteSize;
-        println!("--- Lumberjack model analysis ---");
-        self.verify()
-            .unwrap_or_else(|e| panic!("Could not verify forest: {e:?}"));
-
-        println!(
-            "Random forest model with:\n\t- {} trees\n\t- {} features\n\t- {} targets",
-            self.num_trees(),
-            self.num_features(),
-            self.num_targets()
-        );
-
-        let size_bytes = ByteSize::b(size_of_val(self.nodes()) as u64);
-        println!("Total size: {} nodes ({size_bytes})", self.nodes().len(),);
-
-        struct TreeMetadata {
-            size: usize,
-            depth: usize,
-        }
-
-        let mut tree_metadata = Vec::new();
-
-        for (i, header_idx) in self.tree_headers().enumerate() {
-            let (header, nodes) = self.get_tree(header_idx);
-            let max_depth = tree_max_depth(nodes, header.first_node_idx as usize);
-
-            let size_bytes = bytesize::ByteSize::b(size_of_val(nodes) as u64);
-            println!(
-                "/ Tree {i} / Size: {} nodes ({size_bytes}) / Max depth: {max_depth}",
-                nodes.len(),
-            );
-
-            tree_metadata.push(TreeMetadata {
-                size: nodes.len(),
-                depth: max_depth,
-            });
-        }
-
-        let max_size = tree_metadata.iter().map(|m| m.size).max().unwrap();
-        let max_depth = tree_metadata.iter().map(|m| m.depth).max().unwrap();
-
-        let size_bytes = ByteSize::b((max_size * size_of::<Node>()) as u64);
-        println!();
-        println!("Max tree size: {max_size} nodes ({size_bytes})",);
-        println!("Max tree depth: {max_depth}\n");
-
-        if let Some(c) = num_cells {
-            println!("/ Cell analysis /");
-
-            let num_trees = self.num_trees().get() as usize;
-
-            let base = num_trees / c;
-            let extra = num_trees % c;
-
-            let mut trees_iter = self.tree_headers().enumerate();
-
-            for cell_idx in 0..c {
-                // Lowest cache indices get the extra trees.
-                let num_trees = base + usize::from(cell_idx < extra);
-                let headers = trees_iter.by_ref().take(num_trees);
-
-                let mut required_capacity = 0;
-                let mut max_depth = 0;
-                for (tree_idx, header_idx) in headers {
-                    let header = self.nodes[header_idx].as_header();
-                    required_capacity += header.tree_len() as usize;
-                    max_depth += tree_metadata[tree_idx].depth;
-                }
-
-                let size_bytes = ByteSize((required_capacity * size_of::<Node>()) as u64);
-                println!(
-                    "  Cell {cell_idx}:\n\t{num_trees} trees\n\t{required_capacity} nodes ({size_bytes})\n\tMax depth: {max_depth}"
-                );
-            }
-        }
-
-        println!("------");
     }
 }
 
 pub struct HeadersIterator<'a> {
     nodes: &'a [Node],
     current_idx: usize,
-    tree_idx: usize,
-    num_trees: usize,
     first_pass: bool,
 }
 
 impl<'a> HeadersIterator<'a> {
-    fn new(nodes: &'a [Node], num_trees: usize) -> Self {
+    pub fn new(nodes: &'a [Node]) -> Self {
         Self {
             nodes,
             current_idx: 0,
-            tree_idx: 0,
             first_pass: true,
-            num_trees,
         }
-    }
-
-    pub fn len(&self) -> usize {
-        self.num_trees
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.num_trees == 0
     }
 }
 
@@ -478,13 +383,8 @@ impl<'a> Iterator for HeadersIterator<'a> {
             self.first_pass = false;
             return Some(0);
         }
-        self.tree_idx += 1;
-        if self.tree_idx < self.num_trees {
-            self.current_idx += self.nodes[self.current_idx].as_header().tree_len as usize;
-            Some(self.current_idx)
-        } else {
-            None
-        }
+        self.current_idx += self.nodes[self.current_idx].as_header().tree_len as usize;
+        (self.current_idx < self.nodes.len()).then_some(self.current_idx)
     }
 }
 
@@ -534,24 +434,4 @@ impl fmt::Display for Model<'_> {
         writeln!(f, "------------")?;
         Ok(())
     }
-}
-
-/// Maximum depth of a single tree.
-#[allow(dead_code)]
-fn tree_max_depth(tree_nodes: &[Node], root_idx: usize) -> usize {
-    let branch = tree_nodes[root_idx].as_branch();
-
-    let left_depth = if branch.flags().left_prediction() {
-        1
-    } else {
-        1 + tree_max_depth(tree_nodes, branch.left_ptr().get() as usize)
-    };
-
-    let right_depth = if branch.flags().right_prediction() {
-        1
-    } else {
-        1 + tree_max_depth(tree_nodes, branch.right_ptr().get() as usize)
-    };
-
-    left_depth.max(right_depth)
 }

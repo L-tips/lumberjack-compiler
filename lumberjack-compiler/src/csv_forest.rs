@@ -1,3 +1,4 @@
+use crate::compiled_model;
 use crate::forest_model::{BranchNode, LeafNode, Node, Tree};
 use crate::problem::{Map, Problem};
 use std::fmt::Debug;
@@ -15,7 +16,7 @@ use serde::{Deserialize, Deserializer};
 
 use lumberjack_model::model::{self, Model};
 
-use crate::{forest_model::ForestModel, serialize::to_bytes};
+use crate::forest_model::ForestModel;
 
 /// A single node of a [`SerializedForest`] in classification mode
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -230,7 +231,7 @@ impl CsvForest {
 /// writes a compiled model to the output path.
 pub fn compile_from_csv(
     input: impl AsRef<Path>,
-    output: impl AsRef<Path>,
+    output: Option<impl AsRef<Path>>,
     analyze: Option<Option<usize>>,
 ) -> Result<()> {
     // Read the input file
@@ -255,16 +256,18 @@ pub fn compile_from_csv(
     .map_err(|_| eyre!("Malformed forest"))?;
 
     if let Some(cells) = analyze {
-        compiled.analyze(cells);
+        compiled_model::analyze(&compiled, cells);
     }
 
-    let serialized = to_bytes(&compiled);
+    let serialized = compiled.serialize();
     let ptr = serialized.as_ptr();
     assert!((ptr as usize).is_multiple_of(align_of_val(&compiled)));
 
     // Write the transformed data to the output file
-    let mut output_file = File::create(output).context("Could not create output file")?;
-    output_file.write_all(&serialized)?;
+    if let Some(out_path) = output {
+        let mut output_file = File::create(out_path).context("Could not create output file")?;
+        output_file.write_all(&serialized)?;
+    }
 
     Ok(())
 }

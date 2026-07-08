@@ -298,7 +298,7 @@ checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
 name = "lumberjack-compiler"
 version = "0.1.0"
 dependencies = [
- "aligned-vec",
+ "bytesize",
  "clap",
  "color-eyre",
  "csv",
@@ -328,8 +328,8 @@ dependencies = [
 name = "lumberjack-model"
 version = "0.1.0"
 dependencies = [
+ "aligned-vec",
  "anyhow",
- "bytesize",
  "half",
  "phf",
  "zerocopy",
