@@ -6,8 +6,9 @@ use lumberjack_model::{
     model::{HeadersIterator, Node},
 };
 
-// Split the model as evenly as possible between the provided number of
-/// cells. The node slices can then be written to the cells' caches.
+/// Split the model to distribute trees as evenly as possible between the
+/// provided number of cells. The node slices can then be written to the cells'
+/// caches.
 pub fn split<'a>(model: &'a Model, num_cells: usize) -> Vec<&'a [Node]> {
     let mut cells = Vec::new();
 
@@ -23,8 +24,13 @@ pub fn split<'a>(model: &'a Model, num_cells: usize) -> Vec<&'a [Node]> {
         let num_trees = base + usize::from(cell_idx < extra);
         let mut headers = trees_iter.by_ref().take(num_trees).peekable();
 
+        // Skip caches that may be empty
+        if headers.peek().is_none() {
+            continue;
+        }
+
         let start_idx = {
-            let (_, start_idx) = headers.by_ref().peek().unwrap();
+            let (_, start_idx) = headers.peek().unwrap();
             *start_idx
         };
         let mut num_nodes = 0;

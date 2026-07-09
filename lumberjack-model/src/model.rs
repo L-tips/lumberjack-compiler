@@ -193,6 +193,12 @@ impl Node {
     pub fn is_padding(&self) -> bool {
         self.0.iter().all(|b| *b == 0)
     }
+
+    /// View a slice of Nodes as a byte slice (little-endian layout preserved).
+    pub fn slice_as_bytes(nodes: &[Node]) -> &[u8] {
+        let byte_len = nodes.len() * core::mem::size_of::<Node>();
+        unsafe { core::slice::from_raw_parts(nodes.as_ptr() as *const u8, byte_len) }
+    }
 }
 
 /// An array-backed, optimized random forest model
