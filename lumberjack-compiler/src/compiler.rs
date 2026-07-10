@@ -1,8 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::num::NonZeroU16;
 
 use color_eyre::Result;
-use color_eyre::eyre::{Context, eyre};
+use color_eyre::eyre::{Context, ContextCompat, eyre};
 use half::bf16;
 use lumberjack_model::model::{CacheMetadata, PADDING, TreeHeader, iter_trees};
 use tap::Tap;
@@ -251,9 +252,10 @@ impl ForestModel {
             let mut optimized_tree = Vec::with_capacity(tree_len as usize);
 
             // Add header + padding at beginning
+            let cache_metadata = CacheMetadata::new_empty();
             optimized_tree.extend([
                 lumberjack_model::model::Node::from_header(
-                    TreeHeader::new(tree_len, 2, None)
+                    TreeHeader::new(tree_len, 2, cache_metadata)
                         .map_err(|e| eyre!("Cannot compile model: {e:?}"))?,
                 ),
                 PADDING,
@@ -492,9 +494,12 @@ pub fn split_cells(
     if num_cells <= 1 {
         nodes[0].as_header_mut().set_cache_metadata(
             CacheMetadata::new_cell_header(
-                total_trees
-                    .try_into()
-                    .context("num_trees must fit inside a u16")?,
+                NonZeroU16::new(
+                    total_trees
+                        .try_into()
+                        .context("num_trees must fit inside a u16")?,
+                )
+                .context("Number of caches must not be zero")?,
             )
             .map_err(|e| eyre!("Invalid cache metadata: {e:?}"))?,
         );
@@ -518,7 +523,10 @@ pub fn split_cells(
         }
 
         let header_idx = header_indices[tree_pos];
-        let metadata = CacheMetadata::new_cell_header(num_trees).unwrap();
+        let metadata = CacheMetadata::new_cell_header(
+            NonZeroU16::new(num_trees).context("Number of caches must not be zero")?,
+        )
+        .unwrap();
         nodes[header_idx]
             .as_header_mut()
             .set_cache_metadata(metadata.clone());

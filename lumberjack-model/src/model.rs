@@ -94,15 +94,8 @@ impl Debug for Flags {
 pub struct CacheMetadata(U16);
 
 impl CacheMetadata {
-    pub const MSB_POS: usize = 15;
-    pub const MSB: u16 = 1 << Self::MSB_POS;
-
-    pub fn new_cell_header(num_trees: u16) -> Result<Self, Error> {
-        if num_trees & Self::MSB != 0 {
-            return Err(Error::TooManyTrees);
-        }
-
-        Ok(Self((num_trees | Self::MSB).into()))
+    pub fn new_cell_header(num_trees: NonZeroU16) -> Result<Self, Error> {
+        Ok(Self(num_trees.get().into()))
     }
 
     pub fn new_empty() -> Self {
@@ -111,7 +104,7 @@ impl CacheMetadata {
 
     /// Returns `true` if the cache header flag is set
     pub fn is_cell_header(&self) -> bool {
-        self.0.get() & Self::MSB != 0
+        self.0.get() > 0
     }
 
     /// Return the number of trees in the cache if this is a cache header.
@@ -119,7 +112,7 @@ impl CacheMetadata {
     /// Returns [`None`]` otherwise.
     pub fn get_num_trees(&self) -> Option<u16> {
         if self.is_cell_header() {
-            Some(self.0.get() & !Self::MSB)
+            Some(self.0.get())
         } else {
             None
         }
@@ -138,13 +131,8 @@ impl TreeHeader {
     pub fn new(
         tree_len: u32,
         first_node_idx: u16,
-        num_trees_in_cache: Option<u16>,
+        cache_metadata: CacheMetadata,
     ) -> Result<Self, Error> {
-        let cache_metadata = match num_trees_in_cache {
-            Some(num) => CacheMetadata::new_cell_header(num)?,
-            None => CacheMetadata::new_empty(),
-        };
-
         Ok(Self {
             tree_len: tree_len.into(),
             first_node_idx: first_node_idx.into(),
