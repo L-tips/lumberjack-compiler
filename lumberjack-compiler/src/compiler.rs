@@ -320,8 +320,9 @@ impl ForestModel {
         &self.problem
     }
 
-    /// Make a prediction based on input feature vector
-    pub fn predict(&self, features: &[bf16]) -> String {
+    /// Make a prediction based on input feature vector. Returns a tuple
+    /// containing the prediction, and its number of votes.
+    pub fn predict(&self, features: &[bf16]) -> (String, usize) {
         // Reserve space to store each tree's prediction
         let mut results = Vec::with_capacity(self.num_trees());
 
@@ -363,14 +364,17 @@ impl ForestModel {
             .map(|(num, _)| num)
             .unwrap();
 
-        println!("votes: {votes:?}");
+        let num_votes = votes.values().max().unwrap();
 
-        self.targets()
+        let prediction = self
+            .targets()
             .iter()
             .find(|(_, t)| *t == best_result)
             .unwrap()
             .0
-            .clone()
+            .clone();
+
+        (prediction, *num_votes)
     }
 }
 

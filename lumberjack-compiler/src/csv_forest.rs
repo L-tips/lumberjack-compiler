@@ -252,9 +252,6 @@ pub fn compile_from_csv(
 
     if analyze {
         compiled_model::analyze(&compiled);
-
-        let cache_idx = compiled.cache_headers().collect::<Vec<_>>();
-        println!("{cache_idx:?}");
     }
 
     let serialized = compiled.serialize();

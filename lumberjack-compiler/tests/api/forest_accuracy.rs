@@ -14,7 +14,7 @@ fn raw_model_accuracy_iris_800_trees() -> Result<()> {
 
     for datapoint in test_data {
         let prediction = forest.predict(&datapoint.features);
-        let pred_idx = targets_map.get(&prediction).expect("target not found");
+        let pred_idx = targets_map.get(&prediction.0).expect("target not found");
         assert_eq!(*pred_idx, datapoint.reference_prediction);
     }
 
@@ -46,7 +46,7 @@ fn compiled_model_accuracy_iris_800_trees() -> Result<()> {
 
     for datapoint in test_data {
         let prediction = forest.predict(&datapoint.features);
-        let pred_idx = targets_map.get(&prediction).expect("target not found");
+        let pred_idx = targets_map.get(&prediction.0).expect("target not found");
         assert_eq!(*pred_idx, datapoint.reference_prediction);
     }
 
