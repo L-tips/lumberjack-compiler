@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 aligned-vec = { version = "0.6.1", optional = true }
 half = { workspace = true }
+heapless = "0.9.3"
 zerocopy = { workspace = true }
 
 [dev-dependencies]

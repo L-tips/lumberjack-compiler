@@ -2,6 +2,7 @@ use core::fmt::{self, Debug};
 use core::num::NonZeroU16;
 
 use half::bf16;
+use heapless::Vec;
 use zerocopy::{
     FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes,
     byteorder::little_endian::{U16, U32},
@@ -265,10 +266,10 @@ impl Node {
         self.0.iter().all(|b| *b == 0)
     }
 
-    /// View a slice of Nodes as a byte slice (little-endian layout preserved).
+    /// View a slice of Nodes as a byte slice.
     pub fn slice_as_bytes(nodes: &[Node]) -> &[u8] {
         let byte_len = core::mem::size_of_val(nodes);
-        unsafe { core::slice::from_raw_parts(nodes.as_ptr() as *const u8, byte_len) }
+        unsafe { core::slice::from_raw_parts(nodes.as_ptr().cast::<u8>(), byte_len) }
     }
 }
 
@@ -451,6 +452,38 @@ impl<'data> Model<'data> {
 
         let last_node_idx = header_idx + header.tree_len() as usize - 1;
         (header, &self.nodes[header_idx..=last_node_idx])
+    }
+
+    /// Takes a compiled [`Model`], and returns a [`Vec`] of `&[Node]`, each
+    /// `Vec`` element representing the nodes which should be written to a
+    /// single cell's cache.
+    pub fn split_cache_data<const MAX_CELLS: usize>(&self) -> Vec<&[Node], MAX_CELLS> {
+        let mut result = heapless::Vec::new();
+
+        for cache_head_idx in self.cache_headers() {
+            let num_trees_in_cache = self.nodes()[cache_head_idx]
+                .as_header()
+                .cache_metadata()
+                .get_num_trees()
+                .expect("Node is a cell header");
+
+            let last_tree_node_idx = iter_trees(&self.nodes()[cache_head_idx..])
+                .take(num_trees_in_cache as usize)
+                .last()
+                .unwrap()
+                + cache_head_idx;
+
+            let last_tree_len = self.nodes()[last_tree_node_idx].as_header().tree_len();
+
+            let end_idx = last_tree_node_idx + last_tree_len as usize;
+            let slice = &self.nodes()[cache_head_idx..end_idx];
+
+            result
+                .push(slice)
+                .unwrap_or_else(|_| panic!("Model uses more than {MAX_CELLS} caches"));
+        }
+
+        result
     }
 }
 

@@ -2,6 +2,7 @@
 
 pub use half;
 pub use half::bf16;
+pub use zerocopy;
 
 pub mod model;
 pub mod storage;
