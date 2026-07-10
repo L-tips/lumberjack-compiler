@@ -3,7 +3,10 @@ use color_eyre::{
     Result,
     eyre::{Context, eyre},
 };
-use lumberjack_compiler::{compiled_model, csv_forest::compile_from_csv};
+use lumberjack_compiler::{
+    compiled_model,
+    csv_forest::{compile_from_csv, compile_split_caches_from_csv},
+};
 use lumberjack_model::Model;
 
 use std::{
@@ -40,6 +43,28 @@ enum Command {
     },
 
     #[command(arg_required_else_help = true)]
+    BuildCacheData {
+        /// Input model to compile (CSV)
+        input: PathBuf,
+
+        /// Directory in which to write the cache data files
+        #[arg(short = 'd', long = "output-dir", value_name = "OUT_DIR")]
+        dir: PathBuf,
+
+        /// Prefix to name the cache data files
+        #[arg(short = 'p', long = "prefix", value_name = "PREFIX")]
+        prefix: Option<String>,
+
+        /// Number of tree cells for which to compile the model
+        #[arg(short = 'c', long = "num-cells")]
+        num_cells: u8,
+
+        /// Also output analysis information about the compiled model to stdout
+        #[arg(short = 'a', long = "analyze")]
+        analyze: bool,
+    },
+
+    #[command(arg_required_else_help = true)]
     Analyze {
         /// Path to a compiled model to analyze
         model: PathBuf,
@@ -59,6 +84,17 @@ fn main() -> Result<()> {
         } => {
             compile_from_csv(input, output, num_cells, analyze)?;
         }
+
+        Command::BuildCacheData {
+            input,
+            dir,
+            prefix,
+            num_cells,
+            analyze,
+        } => {
+            compile_split_caches_from_csv(input, dir, prefix, num_cells, analyze)?;
+        }
+
         Command::Analyze { model } => {
             let file = std::fs::File::open(&model)
                 .context(format!("Could not open file: {}", model.display()))?;

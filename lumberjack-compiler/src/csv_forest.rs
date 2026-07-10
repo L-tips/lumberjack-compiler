@@ -239,7 +239,7 @@ pub fn compile_from_csv(
         CsvForest::read(input).context("Could not read forest definition file (CSV).")?;
     let forest = serialized.into_forest_model()?;
 
-    // Optimize the forest
+    // Compile the forest model
     let nodes = forest.compile(num_cells)?;
     let compiled = Model::new(
         forest.num_trees().try_into().unwrap(),
@@ -262,6 +262,57 @@ pub fn compile_from_csv(
     if let Some(out_path) = output {
         let mut output_file = File::create(out_path).context("Could not create output file")?;
         output_file.write_all(&serialized)?;
+    }
+
+    Ok(())
+}
+
+/// Compile the model, splitting it up into one file per cell cache
+pub fn compile_split_caches_from_csv(
+    input: impl AsRef<Path>,
+    dir: impl AsRef<Path>,
+    prefix: Option<String>,
+    num_cells: u8,
+    analyze: bool,
+) -> Result<()> {
+    let dir = dir.as_ref();
+    if !dir.is_dir() || !std::fs::exists(dir)? {
+        return Err(eyre!(
+            "{} is not a directory or does not exist",
+            dir.display()
+        ));
+    }
+
+    // Read the input file
+    let serialized =
+        CsvForest::read(input).context("Could not read forest definition file (CSV).")?;
+    let forest = serialized.into_forest_model()?;
+
+    // Compile the forest
+    let nodes = forest.compile(num_cells)?;
+    let compiled = Model::new(
+        forest.num_trees().try_into().unwrap(),
+        num_cells,
+        &nodes,
+        u16::try_from(forest.num_features())?.try_into()?,
+        u16::try_from(forest.num_targets())?.try_into()?,
+    )
+    .map_err(|e| eyre!("Malformed forest: {e:?}"))?;
+
+    if analyze {
+        compiled_model::analyze(&compiled);
+    }
+
+    for (i, cache_data) in compiled
+        .split_cache_data::<{ u8::MAX as usize }>()
+        .iter()
+        .enumerate()
+    {
+        let prefix = prefix.as_deref().unwrap_or("cache_data");
+        let out_path = dir.join(format!("{prefix}_{i}.lj_data"));
+        let mut output_file = File::create(out_path).context("Could not create output file")?;
+
+        output_file.write_all(lumberjack_model::model::Node::slice_as_bytes(cache_data))?;
     }
 
     Ok(())
