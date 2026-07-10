@@ -1,8 +1,6 @@
-use std::num::NonZeroU16;
-
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
-use lumberjack_model::model::{Classification, Model};
+use lumberjack_model::model::Model;
 
 use crate::helpers::get_forest;
 
@@ -10,18 +8,19 @@ use crate::helpers::get_forest;
 fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> {
     let forest = get_forest("./tests/test-forests/forest_iris_5.csv")?;
 
-    let nodes = forest.compile();
+    let nodes = forest.compile(0)?;
     let compiled = Model::new(
         forest.num_trees().try_into().unwrap(),
+        0,
         &nodes,
-        NonZeroU16::new(forest.num_features().try_into().unwrap()).unwrap(),
-        Classification::new(forest.num_targets().try_into().unwrap()).unwrap(),
+        u16::try_from(forest.num_features())?.try_into()?,
+        u16::try_from(forest.num_targets())?.try_into()?,
     )
-    .map_err(|_| eyre!("Malformed forest"))?;
+    .map_err(|e| eyre!("Malformed forest: {e:?}"))?;
 
     compiled
         .verify()
-        .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
+        .map_err(|e| eyre!("Malformed forest detected upon verification: {e:?}"))?;
 
     let serialized = compiled.serialize();
     let optimized = Model::deserialize(&serialized).map_err(|e| eyre!("Malfomed forest: {e:?}"))?;
@@ -30,9 +29,9 @@ fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> 
         .problem()
         .features_vector_from_csv("./tests/test-data/iris.csv")?;
 
-    for (features, target_prediction) in test_data {
-        let prediction = optimized.predict(&features);
-        assert_eq!(prediction, target_prediction);
+    for datapoint in test_data {
+        let prediction = optimized.predict(&datapoint.features);
+        assert_eq!(prediction, datapoint.reference_prediction);
     }
 
     Ok(())
@@ -55,9 +54,9 @@ fn classification_static_storage_deserializes_correctly() -> Result<()> {
         .problem()
         .features_vector_from_csv("./tests/test-data/iris.csv")?;
 
-    for (features, target_prediction) in test_data {
-        let prediction = deserialized.predict(&features);
-        assert_eq!(prediction, target_prediction);
+    for datapoint in test_data {
+        let prediction = deserialized.predict(&datapoint.features);
+        assert_eq!(prediction, datapoint.reference_prediction);
     }
 
     Ok(())

@@ -18,14 +18,35 @@ pub(crate) type NodePointer = zerocopy::little_endian::U16;
 
 pub type PredictionOutput = u16;
 
-pub struct Classification {
-    num_targets: NonZeroU16,
+/// A 3-byte integer
+///
+/// # Alignment
+///
+/// Caution: this struct is 1-byte aligned!
+#[allow(non_camel_case_types)]
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, TryFromBytes, Immutable)]
+struct u24([u8; 3]);
+
+impl u24 {
+    pub fn as_bytes_le(&self) -> &[u8; 3] {
+        &self.0
+    }
 }
 
-impl Classification {
-    pub fn new(num_targets: u16) -> Result<Self, Error> {
-        let num_targets = NonZeroU16::new(num_targets).ok_or(Error::MalformedForest)?;
-        Ok(Self { num_targets })
+impl TryFrom<u32> for u24 {
+    type Error = ();
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if value >= u32::from_le_bytes([0xff, 0xff, 0xff, 0x0]) {
+            return Err(());
+        }
+        Ok(Self(value.to_le_bytes()[0..3].try_into().unwrap()))
+    }
+}
+
+impl From<u24> for u32 {
+    fn from(val: u24) -> Self {
+        u32::from_le_bytes([val.0[0], val.0[1], val.0[2], 0])
     }
 }
 
@@ -69,30 +90,86 @@ impl Debug for Flags {
 }
 
 #[derive(Debug, Clone, IntoBytes, KnownLayout, Immutable, FromBytes)]
+#[repr(transparent)]
+pub struct CacheMetadata(U16);
+
+impl CacheMetadata {
+    pub const MSB_POS: usize = 15;
+    pub const MSB: u16 = 1 << Self::MSB_POS;
+
+    pub fn new_cell_header(num_trees: u16) -> Result<Self, Error> {
+        if num_trees & Self::MSB != 0 {
+            return Err(Error::TooManyTrees);
+        }
+
+        Ok(Self((num_trees | Self::MSB).into()))
+    }
+
+    pub fn new_empty() -> Self {
+        Self(0.into())
+    }
+
+    /// Returns `true` if the cache header flag is set
+    pub fn is_cell_header(&self) -> bool {
+        self.0.get() & Self::MSB != 0
+    }
+
+    /// Return the number of trees in the cache if this is a cache header.
+    ///
+    /// Returns [`None`]` otherwise.
+    pub fn get_num_trees(&self) -> Option<u16> {
+        if self.is_cell_header() {
+            Some(self.0.get() & !Self::MSB)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, IntoBytes, KnownLayout, Immutable, FromBytes)]
 #[repr(C, align(8))]
 pub struct TreeHeader {
-    tree_len: u32,
-    first_node_idx: u32,
+    tree_len: U32,
+    first_node_idx: U16,
+    cache_metadata: CacheMetadata,
 }
 
 impl TreeHeader {
-    pub fn new(tree_len: u32, first_node_idx: u32) -> Self {
-        Self {
-            tree_len,
-            first_node_idx,
-        }
+    pub fn new(
+        tree_len: u32,
+        first_node_idx: u16,
+        num_trees_in_cache: Option<u16>,
+    ) -> Result<Self, Error> {
+        let cache_metadata = match num_trees_in_cache {
+            Some(num) => CacheMetadata::new_cell_header(num)?,
+            None => CacheMetadata::new_empty(),
+        };
+
+        Ok(Self {
+            tree_len: tree_len.into(),
+            first_node_idx: first_node_idx.into(),
+            cache_metadata,
+        })
     }
 
     pub fn set_tree_len(&mut self, tree_len: u32) {
-        self.tree_len = tree_len;
+        self.tree_len = tree_len.into();
+    }
+
+    pub fn set_cache_metadata(&mut self, cache_metadata: CacheMetadata) {
+        self.cache_metadata = cache_metadata
+    }
+
+    pub fn cache_metadata(&self) -> &CacheMetadata {
+        &self.cache_metadata
     }
 
     pub fn tree_len(&self) -> u32 {
-        self.tree_len
+        self.tree_len.get()
     }
 
-    pub fn first_node_idx(&self) -> u32 {
-        self.first_node_idx
+    pub fn first_node_idx(&self) -> u16 {
+        self.first_node_idx.get()
     }
 }
 
@@ -173,8 +250,14 @@ pub const PADDING: Node = Node([0; 8]);
 impl Node {
     #[inline]
     pub fn as_header(&self) -> &TreeHeader {
-        // Infallible: any 8 bytes are a valid TreeHeader (two u32s).
+        // Infallible: any 8 bytes are a valid TreeHeader (a u32, a u24 and a u8).
         TreeHeader::ref_from_bytes(&self.0).unwrap()
+    }
+
+    #[inline]
+    pub fn as_header_mut(&mut self) -> &mut TreeHeader {
+        // Infallible: any 8 bytes are a valid TreeHeader (a u32, a u24 and a u8).
+        TreeHeader::mut_from_bytes(&mut self.0).unwrap()
     }
 
     pub fn from_header(header: TreeHeader) -> Self {
@@ -196,7 +279,7 @@ impl Node {
 
     /// View a slice of Nodes as a byte slice (little-endian layout preserved).
     pub fn slice_as_bytes(nodes: &[Node]) -> &[u8] {
-        let byte_len = nodes.len() * core::mem::size_of::<Node>();
+        let byte_len = core::mem::size_of_val(nodes);
         unsafe { core::slice::from_raw_parts(nodes.as_ptr() as *const u8, byte_len) }
     }
 }
@@ -205,10 +288,9 @@ impl Node {
 #[repr(C, align(16))]
 #[derive(TryFromBytes, KnownLayout, Immutable)]
 pub struct Model<'data> {
-    num_trees: U32,
+    num_trees: u24,
+    num_cells: u8,
     num_features: U16,
-    /// If num_targets is Some, we have a classification problem.
-    /// Otherwise, we have a regression problem.
     num_targets: U16,
     _padding: u64,
     nodes: &'data [Node],
@@ -217,14 +299,20 @@ pub struct Model<'data> {
 impl<'data> Model<'data> {
     pub fn new(
         num_trees: u32,
+        num_cells: u8,
         nodes: &'data [Node],
         num_features: NonZeroU16,
-        problem: Classification,
+        num_targets: NonZeroU16,
     ) -> Result<Self, Error> {
+        let num_trees = num_trees
+            .try_into()
+            .expect("num_trees must fit into 3 bytes");
+
         Ok(Self {
-            num_trees: U32::new(num_trees),
+            num_trees,
+            num_cells,
             num_features: U16::new(num_features.get()),
-            num_targets: U16::new(problem.num_targets.get()),
+            num_targets: U16::new(num_targets.get()),
             _padding: 0,
             nodes,
         })
@@ -234,8 +322,15 @@ impl<'data> Model<'data> {
         self.nodes
     }
 
-    pub fn num_trees(&self) -> U32 {
-        self.num_trees
+    pub fn num_trees(&self) -> u32 {
+        self.num_trees.into()
+    }
+    pub fn num_trees_to_bytes(&self) -> &[u8] {
+        self.num_trees.as_bytes_le()
+    }
+
+    pub fn num_cells(&self) -> u8 {
+        self.num_cells
     }
 
     pub fn num_targets(&self) -> U16 {
@@ -261,7 +356,7 @@ impl<'data> Model<'data> {
             for (i, node) in tree_nodes
                 .iter()
                 .enumerate()
-                .skip(header.first_node_idx as _)
+                .skip(header.first_node_idx() as _)
             {
                 // Skip padding
                 if node.is_padding() {
@@ -284,7 +379,7 @@ impl<'data> Model<'data> {
             }
         }
 
-        assert_eq!(num_trees, self.num_trees().get());
+        assert_eq!(num_trees, self.num_trees());
 
         Ok(())
     }
@@ -300,7 +395,13 @@ impl<'data> Model<'data> {
     /// Return an iterator which yields the indices of all tree headers in this
     /// forest
     pub fn tree_headers(&self) -> HeadersIterator<'_> {
-        HeadersIterator::new(self.nodes)
+        iter_trees(self.nodes())
+    }
+
+    /// Return an iterator which yields the indices of all cell headers in this
+    /// forest
+    pub fn cache_headers(&self) -> CellsIterator<'_> {
+        iter_cells(self.nodes())
     }
 
     /// Perform a prediction with the given features vector.
@@ -314,7 +415,7 @@ impl<'data> Model<'data> {
         for header_idx in self.tree_headers() {
             let (header, tree_nodes) = self.get_tree(header_idx);
 
-            let mut node = tree_nodes[header.first_node_idx as usize].as_branch();
+            let mut node = tree_nodes[header.first_node_idx() as usize].as_branch();
 
             let prediction = loop {
                 let test = features[node.split_with() as usize] <= node.split_at();
@@ -356,13 +457,20 @@ impl<'data> Model<'data> {
             .unwrap()
     }
 
-    /// Get the tree's nodes and header
+    /// Get the header and nodes of the tree that starts at the provided index
     pub fn get_tree(&self, header_idx: usize) -> (&TreeHeader, &[Node]) {
         let header = self.nodes[header_idx].as_header();
 
-        let last_node_idx = header_idx + header.tree_len as usize - 1;
+        let last_node_idx = header_idx + header.tree_len() as usize - 1;
         (header, &self.nodes[header_idx..=last_node_idx])
     }
+}
+
+/// Iterate over the tree headers in the provided [`Node`] slice.
+///
+/// The first node in the slice *must* be a tree header.
+pub fn iter_trees(nodes: &[Node]) -> HeadersIterator<'_> {
+    HeadersIterator::new(nodes)
 }
 
 pub struct HeadersIterator<'a> {
@@ -372,7 +480,7 @@ pub struct HeadersIterator<'a> {
 }
 
 impl<'a> HeadersIterator<'a> {
-    pub fn new(nodes: &'a [Node]) -> Self {
+    fn new(nodes: &'a [Node]) -> Self {
         Self {
             nodes,
             current_idx: 0,
@@ -389,8 +497,45 @@ impl<'a> Iterator for HeadersIterator<'a> {
             self.first_pass = false;
             return Some(0);
         }
-        self.current_idx += self.nodes[self.current_idx].as_header().tree_len as usize;
+        self.current_idx += self.nodes[self.current_idx].as_header().tree_len() as usize;
         (self.current_idx < self.nodes.len()).then_some(self.current_idx)
+    }
+}
+
+/// Iterate over the cell headers in the provided [`Node`] slice.
+///
+/// The first node in the slice *must* be a cell header.
+pub fn iter_cells(nodes: &[Node]) -> CellsIterator<'_> {
+    CellsIterator::new(nodes)
+}
+
+pub struct CellsIterator<'a> {
+    iter: HeadersIterator<'a>,
+}
+
+impl<'a> CellsIterator<'a> {
+    fn new(nodes: &'a [Node]) -> Self {
+        Self {
+            iter: HeadersIterator::new(nodes),
+        }
+    }
+}
+
+impl<'a> Iterator for CellsIterator<'a> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(idx) = self.iter.next() {
+            if self.iter.nodes[idx]
+                .as_header()
+                .cache_metadata
+                .is_cell_header()
+            {
+                return Some(idx);
+            }
+        }
+
+        None
     }
 }
 
@@ -400,7 +545,7 @@ impl fmt::Display for Model<'_> {
             f,
             "OPTIMIZED CLASSIFICATION Forest: {} trees, size {}, {} features,
 {} targets\n------------",
-            self.num_trees,
+            self.num_trees(),
             self.nodes.len(),
             self.num_features,
             self.num_targets
@@ -421,8 +566,8 @@ impl fmt::Display for Model<'_> {
                 let header = node.as_header();
                 writeln!(f, "{header:?}")?;
 
-                first_node_idx = header.first_node_idx;
-                tree_len = header.tree_len;
+                first_node_idx = header.first_node_idx();
+                tree_len = header.tree_len();
             } else if node_idx < first_node_idx || node.is_padding() {
                 writeln!(f, "Padding | {:?}", node.as_bytes())?;
             } else {
@@ -431,7 +576,7 @@ impl fmt::Display for Model<'_> {
 
             node_idx += 1;
 
-            if node_idx >= tree_len {
+            if node_idx as u32 >= tree_len {
                 tree_idx += 1;
                 node_idx = 0;
                 writeln!(f, "TREE #{tree_idx}")?;

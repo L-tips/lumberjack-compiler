@@ -1,11 +1,10 @@
 use crate::compiled_model;
-use crate::forest_model::{BranchNode, LeafNode, Node, Tree};
-use crate::problem::{Map, Problem};
+use crate::compiler::{BranchNode, LeafNode, Node, Tree};
+use crate::problem::{Map, ProblemDefinition};
 use std::fmt::Debug;
 use std::{
     fs::File,
     io::{self, Write},
-    num::NonZeroU16,
     path::Path,
 };
 
@@ -14,9 +13,9 @@ use half::bf16;
 use indexmap::map::Entry;
 use serde::{Deserialize, Deserializer};
 
-use lumberjack_model::model::{self, Model};
+use lumberjack_model::model::Model;
 
-use crate::forest_model::ForestModel;
+use crate::compiler::ForestModel;
 
 /// A single node of a [`SerializedForest`] in classification mode
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -57,7 +56,7 @@ impl CsvNode {
     }
 
     fn deserialize<R: io::Read>(
-        problem: &mut Problem,
+        problem: &mut ProblemDefinition,
         rdr: &mut csv::Reader<R>,
     ) -> Result<Vec<Self>> {
         let mut feat_count = 0;
@@ -95,7 +94,7 @@ impl CsvNode {
         Ok(nodes)
     }
 
-    fn normalize(self, problem: &Problem) -> Result<Node> {
+    fn normalize(self, problem: &ProblemDefinition) -> Result<Node> {
         if self.split_on.is_some() {
             let branch = BranchNode {
                 split_with: self
@@ -131,11 +130,11 @@ impl CsvNode {
 #[derive(Debug)]
 pub struct CsvForest {
     nodes: Vec<CsvNode>,
-    problem: Problem,
+    problem: ProblemDefinition,
 }
 
 impl CsvForest {
-    pub fn problem(&self) -> &Problem {
+    pub fn problem(&self) -> &ProblemDefinition {
         &self.problem
     }
 
@@ -155,7 +154,7 @@ impl CsvForest {
             .comment(Some(b'#'))
             .from_reader(rdr);
 
-        let mut problem = Problem::default();
+        let mut problem = ProblemDefinition::default();
 
         let nodes = CsvNode::deserialize(&mut problem, &mut rdr)?;
         Ok(CsvForest { nodes, problem })
@@ -232,7 +231,8 @@ impl CsvForest {
 pub fn compile_from_csv(
     input: impl AsRef<Path>,
     output: Option<impl AsRef<Path>>,
-    analyze: Option<Option<usize>>,
+    num_cells: u8,
+    analyze: bool,
 ) -> Result<()> {
     // Read the input file
     let serialized =
@@ -240,23 +240,21 @@ pub fn compile_from_csv(
     let forest = serialized.into_forest_model()?;
 
     // Optimize the forest
-    let nodes = forest.compile();
+    let nodes = forest.compile(num_cells)?;
     let compiled = Model::new(
         forest.num_trees().try_into().unwrap(),
+        num_cells,
         &nodes,
-        NonZeroU16::new(
-            forest
-                .num_features()
-                .try_into()
-                .expect("Features must fit into an u16."),
-        )
-        .expect("Number of features must be non-zero."),
-        model::Classification::new(forest.num_targets().try_into().unwrap()).unwrap(),
+        u16::try_from(forest.num_features())?.try_into()?,
+        u16::try_from(forest.num_targets())?.try_into()?,
     )
-    .map_err(|_| eyre!("Malformed forest"))?;
+    .map_err(|e| eyre!("Malformed forest: {e:?}"))?;
 
-    if let Some(cells) = analyze {
-        compiled_model::analyze(&compiled, cells);
+    if analyze {
+        compiled_model::analyze(&compiled);
+
+        let cache_idx = compiled.cache_headers().collect::<Vec<_>>();
+        println!("{cache_idx:?}");
     }
 
     let serialized = compiled.serialize();

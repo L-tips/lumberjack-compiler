@@ -1,10 +1,10 @@
 use core::num::NonZeroU16;
 
-use zerocopy::{byteorder::little_endian::U32, little_endian::U16};
+use zerocopy::little_endian::U16;
 
 use crate::{
     Error,
-    model::{ALIGNMENT, Branch, Model, Node},
+    model::{ALIGNMENT, Branch, Model, Node, u24},
 };
 
 impl<'a> Model<'a> {
@@ -15,26 +15,30 @@ impl<'a> Model<'a> {
         assert_eq!(base_ptr as usize % align_of::<Self>(), 0);
 
         // Ensure we have enough data for the fixed-size part of ConcreteType
-        let header_len = size_of::<u32>()  // num_trees
-            + size_of::<u16>()               // num_features
-            + size_of::<u16>()               // num_targets
+        let header_len = size_of::<u24>()  // num_trees
+            + size_of::<u8>()                  // num_cells
+            + size_of::<u16>()                 // num_features
+            + size_of::<u16>()                 // num_targets
             + size_of::<u64>(); // padding
 
         // Ensure we at least have enough data for all fields + at least 1 node
         assert!(buffer.len() >= header_len + size_of::<Node>());
 
         unsafe {
-            // Number of trees (4 bytes)
-            let a_ptr = base_ptr as *const u32;
-            let num_trees = U32::new(*a_ptr);
+            // Number of trees (3 bytes)
+            let ptr = base_ptr as *const u24;
+            let num_trees = *ptr;
+
+            let ptr = ptr.add(1) as *const u8;
+            let num_cells = *ptr;
 
             // Number of features (2 bytes)
-            let b_ptr = a_ptr.add(1) as *const U16;
-            let num_features = *b_ptr;
+            let ptr = ptr.add(1) as *const U16;
+            let num_features = *ptr;
             NonZeroU16::new(num_features.get()).ok_or(Error::NoFeatures)?;
 
             // Number of targets (2 bytes)
-            let c_ptr = b_ptr.add(1);
+            let c_ptr = ptr.add(1);
             let num_targets = *c_ptr;
             NonZeroU16::new(num_targets.get()).ok_or(Error::NoTargets)?;
 
@@ -57,6 +61,7 @@ impl<'a> Model<'a> {
 
             Ok(Model {
                 num_trees,
+                num_cells,
                 num_features,
                 num_targets,
                 _padding: 0,

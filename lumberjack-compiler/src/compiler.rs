@@ -1,11 +1,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
+use color_eyre::Result;
+use color_eyre::eyre::{Context, eyre};
 use half::bf16;
-use lumberjack_model::model::{PADDING, TreeHeader};
+use lumberjack_model::model::{CacheMetadata, PADDING, TreeHeader, iter_trees};
 use tap::Tap;
 
-use crate::problem::{Map, Problem};
+use crate::problem::{Map, ProblemDefinition};
 
 #[derive(Debug, Clone)]
 pub struct BranchNode {
@@ -104,17 +106,17 @@ impl fmt::Display for Tree {
 #[derive(Debug)]
 pub struct ForestModel {
     trees: Vec<Tree>,
-    problem: Problem,
+    problem: ProblemDefinition,
 }
 
 impl ForestModel {
-    pub(crate) fn new(trees: Vec<Tree>, problem: Problem) -> Self {
+    pub(crate) fn new(trees: Vec<Tree>, problem: ProblemDefinition) -> Self {
         Self { trees, problem }
     }
 
     /// Turn this [`ForestModel`] into a
     /// [`Model`](lumberjack_model::model::Model).
-    pub fn compile(&self) -> Vec<lumberjack_model::model::Node> {
+    pub fn compile(&self, num_cells: u8) -> Result<Vec<lumberjack_model::model::Node>> {
         let max_forest_len = self.trees.iter().map(|t| t.nodes.len()).sum();
         let mut forest_nodes = Vec::with_capacity(max_forest_len);
 
@@ -244,13 +246,16 @@ impl ForestModel {
             // Add header + padding for full tree length
             let tree_len: u32 = (placed_nodes.len() + tail_padding + 2)
                 .try_into()
-                .expect("Tree length should fit into u32");
+                .context("Tree length should fit into u32")?;
 
             let mut optimized_tree = Vec::with_capacity(tree_len as usize);
 
             // Add header + padding at beginning
             optimized_tree.extend([
-                lumberjack_model::model::Node::from_header(TreeHeader::new(tree_len, 2)),
+                lumberjack_model::model::Node::from_header(
+                    TreeHeader::new(tree_len, 2, None)
+                        .map_err(|e| eyre!("Cannot compile model: {e:?}"))?,
+                ),
                 PADDING,
             ]);
 
@@ -284,7 +289,9 @@ impl ForestModel {
             forest_nodes.extend(optimized_tree);
         }
 
-        forest_nodes
+        split_cells(&mut forest_nodes, num_cells, trees.len())?;
+
+        Ok(forest_nodes)
     }
 
     pub fn num_trees(&self) -> usize {
@@ -307,7 +314,7 @@ impl ForestModel {
         self.problem.features()
     }
 
-    pub fn problem(&self) -> &Problem {
+    pub fn problem(&self) -> &ProblemDefinition {
         &self.problem
     }
 
@@ -472,4 +479,52 @@ fn id_position(nodes: &[LinkedNode], id: usize) -> u16 {
         .unwrap_or_else(|| panic!("Could not find node ID {id}"))
         .try_into()
         .expect("Node index does not fit into u16")
+}
+
+/// Split the model to distribute trees as evenly as possible between the
+/// provided number of cells
+pub fn split_cells(
+    nodes: &mut [lumberjack_model::model::Node],
+    num_cells: u8,
+    total_trees: usize,
+) -> Result<()> {
+    // Avoid division by zero: first cache holds all the trees
+    if num_cells <= 1 {
+        nodes[0].as_header_mut().set_cache_metadata(
+            CacheMetadata::new_cell_header(
+                total_trees
+                    .try_into()
+                    .context("num_trees must fit inside a u16")?,
+            )
+            .map_err(|e| eyre!("Invalid cache metadata: {e:?}"))?,
+        );
+        return Ok(());
+    }
+
+    let base: u16 = (total_trees / num_cells as usize)
+        .try_into()
+        .context("num_trees must fit inside a u16")?;
+    let extra = total_trees % num_cells as usize;
+
+    let header_indices = iter_trees(nodes).collect::<Vec<_>>();
+
+    let mut tree_pos = 0;
+    for cell_idx in 0..num_cells {
+        let num_trees = base + u16::from((cell_idx as usize) < extra);
+
+        // Skip cells that would have no trees
+        if tree_pos >= header_indices.len() {
+            continue;
+        }
+
+        let header_idx = header_indices[tree_pos];
+        let metadata = CacheMetadata::new_cell_header(num_trees).unwrap();
+        nodes[header_idx]
+            .as_header_mut()
+            .set_cache_metadata(metadata.clone());
+
+        tree_pos += num_trees as usize
+    }
+
+    Ok(())
 }

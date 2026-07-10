@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-pub use phf;
+pub use half;
+pub use half::bf16;
 
 pub mod model;
 pub mod storage;
@@ -15,4 +16,5 @@ pub enum Error {
     MisalignedData,
     NoTargets,
     NoFeatures,
+    TooManyTrees,
 }

@@ -1,10 +1,9 @@
-use std::num::NonZeroU16;
 use std::path::Path;
 use std::path::PathBuf;
 
 use lumberjack_compiler::csv_forest::CsvForest;
 use lumberjack_compiler::problem::Map;
-use lumberjack_model::model::{Classification, Model};
+use lumberjack_model::model::Model;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use proc_macro2::TokenStream as TokenStream2;
@@ -117,7 +116,7 @@ pub fn include_rf_model(input: TokenStream) -> TokenStream {
 pub fn compile_model(input: TokenStream) -> TokenStream {
     let CompileInput { path, section, .. } = parse_macro_input!(input as CompileInput);
     let section = section.as_deref();
-    yeet_syn_err!(compile_model_from_csv(path, section)).into()
+    yeet_syn_err!(compile_model_from_csv(path, section, 0)).into()
 }
 
 /// Build a a slice of features from a CSV forest spec as a `&'static [&str]`,
@@ -156,6 +155,7 @@ pub fn feat_vectors(input: TokenStream) -> TokenStream {
 fn compile_model_from_csv(
     model_path: impl AsRef<Path>,
     section: Option<&str>,
+    num_cells: u8,
 ) -> syn::Result<TokenStream2> {
     let csv_forest = read_csv_model(model_path)?;
     let forest = csv_forest
@@ -163,19 +163,21 @@ fn compile_model_from_csv(
         .map_syn_err(|_| "Could not deserialize the CSV forest".to_owned())?;
 
     // Optimize the forest
-    let nodes = forest.compile();
+    let nodes = forest
+        .compile(num_cells)
+        .map_syn_err(|e| format!("Could not compile model: {e:?}"))?;
     let compiled = Model::new(
         forest.num_trees().try_into().unwrap(),
+        num_cells,
         &nodes,
-        NonZeroU16::new(
-            forest
-                .num_features()
-                .try_into()
-                .map_syn_err(|_| "Number of forest features must fit into a u16".to_owned())?,
-        )
-        .ok_or("Zero features")
-        .map_syn_err(|_| "Number of features must be non-zero.".to_owned())?,
-        Classification::new(forest.num_targets().try_into().unwrap()).unwrap(),
+        u16::try_from(forest.num_features())
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        u16::try_from(forest.num_targets())
+            .unwrap()
+            .try_into()
+            .unwrap(),
     )
     .map_syn_err(|_| "Malformed forest".to_owned())?;
 
@@ -226,8 +228,9 @@ fn build_feat_vectors(
         .features_vector_from_csv(vectors_path)
         .map_syn_err(|e| format!("Cannot read CSV: {e}"))?;
 
-    let row_tokens = rows.iter().map(|(features, prediction)| {
-        let vals = features.iter().map(|v| v.to_f32());
+    let row_tokens = rows.iter().map(|data_point| {
+        let vals = data_point.features.iter().map(|v| v.to_f32());
+        let prediction = data_point.reference_prediction;
 
         quote! {
             (&[ #(::ibex_demo_system_hal::half::bf16::from_f32_const(#vals)),* ], #prediction)

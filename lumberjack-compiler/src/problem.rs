@@ -7,19 +7,17 @@ pub type Map = indexmap::IndexMap<String, u16>;
 
 pub struct DataPoint {
     pub features: Vec<bf16>,
-    /// Prediction as given by the trained model
-    pub trained_prediction: u16,
-    /// Prediction as given by the imported model (after quantization)
-    pub forest_prediction: u16,
+    /// Prediction as given by the reference software model
+    pub reference_prediction: u16,
 }
 
 #[derive(Default, Clone, Debug)]
-pub struct Problem {
+pub struct ProblemDefinition {
     targets: Map,
     features: Map,
 }
 
-impl Problem {
+impl ProblemDefinition {
     pub fn targets(&self) -> &Map {
         &self.targets
     }
@@ -48,7 +46,7 @@ impl Problem {
     pub fn features_vector_from_csv(
         &self,
         csv_path: impl AsRef<Path>,
-    ) -> color_eyre::Result<Vec<(Vec<bf16>, u16)>> {
+    ) -> color_eyre::Result<Vec<DataPoint>> {
         let features_map = self.features();
         let targets_map = self.targets();
 
@@ -78,7 +76,7 @@ impl Problem {
         }
 
         let num_features = features_map.len();
-        let mut row_data: Vec<(Vec<bf16>, u16)> = Vec::new();
+        let mut row_data = Vec::new();
 
         for record in rdr.records() {
             let record = record.context("bad CSV row")?;
@@ -97,7 +95,11 @@ impl Problem {
                     row[*feature_idx as usize] = val;
                 }
             }
-            row_data.push((row, *pred_idx));
+            let data_point = DataPoint {
+                features: row,
+                reference_prediction: *pred_idx,
+            };
+            row_data.push(data_point);
         }
 
         if row_data.is_empty() {

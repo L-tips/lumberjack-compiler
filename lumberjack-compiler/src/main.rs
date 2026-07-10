@@ -25,30 +25,24 @@ enum Command {
         /// Input model to compile (CSV)
         input: PathBuf,
 
-        /// Path where the compiled model will be written to
+        /// Path where the compiled model will be written to. If not set, no
+        /// file will be written.
         #[arg(short = 'o', long = "output", value_name = "OUTPUT_FILE")]
         output: Option<PathBuf>,
+
+        /// Number of tree cells for which to compile the model
+        #[arg(short = 'c', long = "num-cells")]
+        num_cells: u8,
 
         /// Also output analysis information about the compiled model to stdout
         #[arg(short = 'a', long = "analyze")]
         analyze: bool,
-
-        /// Also output analysis information about the compiled model to stdout,
-        /// with additional information related to the provided number of cells
-        /// in the system.
-        #[arg(short = 'c', long = "analyze-cells")]
-        analyze_cells: Option<usize>,
     },
 
     #[command(arg_required_else_help = true)]
     Analyze {
         /// Path to a compiled model to analyze
         model: PathBuf,
-
-        /// Print additional information with the given number of cells in the
-        /// system
-        #[arg(short = 'c', long = "cells")]
-        num_cells: Option<usize>,
     },
 }
 
@@ -61,16 +55,11 @@ fn main() -> Result<()> {
             input,
             output,
             analyze,
-            analyze_cells,
+            num_cells,
         } => {
-            let mut analysis_info = if analyze { Some(None) } else { None };
-            if let Some(cell_info) = analyze_cells {
-                analysis_info = Some(Some(cell_info));
-            }
-
-            compile_from_csv(input, output, analysis_info)?;
+            compile_from_csv(input, output, num_cells, analyze)?;
         }
-        Command::Analyze { model, num_cells } => {
+        Command::Analyze { model } => {
             let file = std::fs::File::open(&model)
                 .context(format!("Could not open file: {}", model.display()))?;
             let mut file = BufReader::new(file);
@@ -79,7 +68,7 @@ fn main() -> Result<()> {
             let model = Model::deserialize(&buf)
                 .map_err(|e| eyre!("Could not deserialize compiled model: {e:?}"))?;
 
-            compiled_model::analyze(&model, num_cells);
+            compiled_model::analyze(&model);
         }
     }
 

@@ -8,8 +8,10 @@ impl Model<'_> {
     pub fn serialize(&self) -> AVec<u8> {
         let mut bytes = AVec::<u8>::with_capacity(ALIGNMENT, 8);
 
-        // Number of trees (4 bytes)
-        bytes.extend_from_slice(self.num_trees().to_bytes().as_slice());
+        // Number of trees (3 bytes)
+        bytes.extend_from_slice(self.num_trees_to_bytes());
+
+        bytes.extend_from_slice(self.num_cells().as_bytes());
 
         // Number of features (2 bytes)
         bytes.extend_from_slice(&self.num_features().to_bytes());

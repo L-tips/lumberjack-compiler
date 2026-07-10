@@ -5,5 +5,4 @@ members = ["lumberjack-model", "lumberjack-compiler", "lumberjack-macros"]
 
 [workspace.dependencies]
 half = { version = "2.6.0", default-features = false, features = ["zerocopy"] }
-phf = {version = "0.14.0", default-features = false }
 zerocopy = { version = "0.8.7", features = ["derive"] }

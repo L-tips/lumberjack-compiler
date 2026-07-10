@@ -1,8 +1,6 @@
-use std::num::NonZeroU16;
-
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
-use lumberjack_model::model::{Classification, Model};
+use lumberjack_model::model::Model;
 
 use crate::helpers::get_forest;
 
@@ -14,10 +12,10 @@ fn raw_model_accuracy_iris_800_trees() -> Result<()> {
         .features_vector_from_csv("./tests/test-data/iris.csv")?;
     let targets_map = forest.targets();
 
-    for (features, target_prediction) in test_data {
-        let prediction = forest.predict(features.as_slice());
+    for datapoint in test_data {
+        let prediction = forest.predict(&datapoint.features);
         let pred_idx = targets_map.get(&prediction).expect("target not found");
-        assert_eq!(*pred_idx, target_prediction);
+        assert_eq!(*pred_idx, datapoint.reference_prediction);
     }
 
     Ok(())
@@ -27,12 +25,13 @@ fn raw_model_accuracy_iris_800_trees() -> Result<()> {
 fn compiled_model_accuracy_iris_800_trees() -> Result<()> {
     let forest = get_forest("./tests/test-forests/forest_iris_800.csv")?;
 
-    let nodes = forest.compile();
+    let nodes = forest.compile(0)?;
     let optimized = Model::new(
         forest.num_trees().try_into().unwrap(),
+        0,
         &nodes,
-        NonZeroU16::new(forest.num_features().try_into().unwrap()).unwrap(),
-        Classification::new(forest.num_targets().try_into().unwrap()).unwrap(),
+        u16::try_from(forest.num_features())?.try_into()?,
+        u16::try_from(forest.num_targets())?.try_into()?,
     )
     .map_err(|e| eyre!("Malformed forest: {e:?}"))?;
 
@@ -45,10 +44,10 @@ fn compiled_model_accuracy_iris_800_trees() -> Result<()> {
         .features_vector_from_csv("./tests/test-data/iris.csv")?;
     let targets_map = forest.targets();
 
-    for (features, target_prediction) in test_data {
-        let prediction = forest.predict(features.as_slice());
+    for datapoint in test_data {
+        let prediction = forest.predict(&datapoint.features);
         let pred_idx = targets_map.get(&prediction).expect("target not found");
-        assert_eq!(*pred_idx, target_prediction);
+        assert_eq!(*pred_idx, datapoint.reference_prediction);
     }
 
     Ok(())
