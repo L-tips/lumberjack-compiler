@@ -23,6 +23,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Compile a .lumberjack from a CSV definition
     #[command(arg_required_else_help = true)]
     Build {
         /// Input model to compile (CSV)
@@ -42,6 +43,8 @@ enum Command {
         analyze: bool,
     },
 
+    /// Compile a Lumberjack model from a CSV definition, splitting it into
+    /// per-cell cache .lj_data files
     #[command(arg_required_else_help = true)]
     BuildCacheData {
         /// Input model to compile (CSV)
@@ -64,6 +67,7 @@ enum Command {
         analyze: bool,
     },
 
+    /// Analyze a compiled .lumberjack model
     #[command(arg_required_else_help = true)]
     Analyze {
         /// Path to a compiled model to analyze
