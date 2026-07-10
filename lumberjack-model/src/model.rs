@@ -429,9 +429,6 @@ impl<'data> Model<'data> {
             *vote += 1;
         }
 
-        #[cfg(feature = "std")]
-        println!("votes: {votes:?}");
-
         // Select the class with the highest votes, preferring the lowest class index in
         // case of a tie
         votes

@@ -337,18 +337,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lumberjack-macros"
-version = "0.1.0"
-dependencies = [
- "csv",
- "lumberjack-compiler",
- "lumberjack-model",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "lumberjack-model"
 version = "0.1.0"
 dependencies = [
