@@ -6,6 +6,8 @@ use lumberjack_model::{
     model::{Node, iter_trees},
 };
 
+use crate::ir::tree_max_depth;
+
 /// Perform an analysis of the model, and output some useful metrics to stdout.
 ///
 /// The function takes a number of cells as an optional parameter. If set,
@@ -13,7 +15,7 @@ use lumberjack_model::{
 pub fn analyze(model: &Model) {
     println!("--- Lumberjack model analysis ---");
     model
-        .verify()
+        .verify_linear()
         .unwrap_or_else(|e| panic!("Could not verify forest: {e:?}"));
 
     println!(
@@ -96,23 +98,4 @@ pub fn analyze(model: &Model) {
     }
 
     println!("------");
-}
-
-/// Maximum depth of a single tree.
-fn tree_max_depth(tree_nodes: &[Node], root_idx: usize) -> usize {
-    let branch = tree_nodes[root_idx].as_branch();
-
-    let left_depth = if branch.flags().left_prediction() {
-        1
-    } else {
-        1 + tree_max_depth(tree_nodes, branch.left_ptr().get() as usize)
-    };
-
-    let right_depth = if branch.flags().right_prediction() {
-        1
-    } else {
-        1 + tree_max_depth(tree_nodes, branch.right_ptr().get() as usize)
-    };
-
-    left_depth.max(right_depth)
 }

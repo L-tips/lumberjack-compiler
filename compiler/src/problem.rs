@@ -2,7 +2,7 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 
 use color_eyre::eyre::{Context, eyre};
 
-use crate::compiler::Feature;
+use crate::Feature;
 
 pub type Map = indexmap::IndexMap<String, u16>;
 

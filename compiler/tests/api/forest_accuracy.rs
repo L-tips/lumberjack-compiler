@@ -1,5 +1,7 @@
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
+use lumberjack_compiler::PlacementStrategy;
+use lumberjack_compiler::ir::PartitionStrategy;
 use lumberjack_model::model::Model;
 
 use crate::helpers::parse_source;
@@ -44,7 +46,11 @@ fn ir_accuracy_iris_800_trees_quantized() -> Result<()> {
 fn compiled_model_accuracy_iris_800_trees() -> Result<()> {
     let forest = parse_source("./tests/test-forests/forest_iris_800.csv")?;
 
-    let nodes = forest.compile(0)?;
+    let nodes = forest.compile(
+        0,
+        PlacementStrategy::ExecutionAware,
+        PartitionStrategy::EqualSorted,
+    )?;
     let optimized = Model::new(
         forest.num_trees().try_into().unwrap(),
         0,
@@ -55,7 +61,7 @@ fn compiled_model_accuracy_iris_800_trees() -> Result<()> {
     .map_err(|e| eyre!("Malformed forest: {e:?}"))?;
 
     optimized
-        .verify()
+        .verify_linear()
         .map_err(|e| eyre!("Malformed forest detected upon verification: {e:?}"))?;
 
     let test_data = forest

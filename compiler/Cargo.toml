@@ -14,8 +14,9 @@ serde_json = "1.0.133"
 tap = "1.0.1"
 zerocopy = { workspace = true }
 indexmap = "2.14.0"
+rand = "0.10.2"
 
 [dependencies.lumberjack-model]
-path = "../lumberjack-model"
+path = "../model"
 features = ["std"]
 

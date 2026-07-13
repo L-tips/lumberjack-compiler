@@ -1,0 +1,421 @@
+use std::{collections::VecDeque, fmt};
+
+use color_eyre::eyre::{Context, eyre};
+use half::bf16;
+use lumberjack_model::model::{self, CacheMetadata, PADDING, TreeHeader};
+
+use crate::{
+    Feature,
+    ir::{Node, Tree},
+};
+
+/// Node placement strategy for tree compilation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum PlacementStrategy {
+    #[default]
+    ExecutionAware,
+    Random,
+    BreadthFirst,
+    DepthFirst,
+}
+
+impl PlacementStrategy {
+    fn placement_fn<F: Feature>(&self) -> impl Fn(&Tree<F>) -> Vec<LinkedNode> {
+        match self {
+            Self::ExecutionAware => execution_aware_placement,
+            Self::Random => random_placement,
+            Self::BreadthFirst => breadth_first_placement,
+            Self::DepthFirst => depth_first_placement,
+        }
+    }
+
+    fn place_nodes<F: Feature>(&self, tree: &Tree<F>) -> Vec<LinkedNode> {
+        self.placement_fn()(tree)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Branch {
+    Ptr(usize),
+    Prediction(u16),
+}
+
+impl Branch {
+    fn is_prediction(&self) -> bool {
+        matches!(self, Branch::Prediction(_))
+    }
+}
+
+/// Transitive data structure keeping track of a node's parent
+#[derive(Debug)]
+struct LinkedNode {
+    id: usize,
+    split_with: u16,
+    split_at: bf16,
+    left_child: Branch,
+    right_child: Branch,
+    _parent_id: Option<usize>,
+}
+
+impl fmt::Display for LinkedNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ID {}\t| split_with: {}, split_at: {}, left: {:?}, right: {:?}",
+            self.id, self.split_with, self.split_at, self.left_child, self.right_child
+        )
+    }
+}
+
+/// Extract the node from the queue if it's a leaf, otherwise leave it in.
+fn extract_branch_if_leaf<F: Feature>(
+    unplaced_nodes: &mut VecDeque<(usize, &Node<F>)>,
+    id: usize,
+) -> Branch {
+    let node = unplaced_nodes
+        .iter()
+        .find(|(i, _)| *i == id)
+        .map(|(_, n)| *n)
+        .unwrap_or_else(|| panic!("Node ID {id} could not be found"));
+
+    match node {
+        Node::Leaf(l) => {
+            let pos = unplaced_nodes.iter().position(|(i, _)| *i == id).unwrap();
+            unplaced_nodes.remove(pos).unwrap();
+            Branch::Prediction(l.prediction)
+        }
+        Node::Branch(_) => Branch::Ptr(id),
+    }
+}
+
+fn extract_branch<'a, F: Feature>(
+    unplaced_nodes: &mut VecDeque<(usize, &'a Node<F>)>,
+    id: usize,
+) -> (usize, &'a Node<F>) {
+    let pos = unplaced_nodes.iter().position(|(i, _)| *i == id).unwrap();
+    unplaced_nodes.remove(pos).unwrap()
+}
+
+fn position_of(nodes: &[LinkedNode], id: usize) -> u16 {
+    nodes
+        .iter()
+        .position(|n| n.id == id)
+        .unwrap_or_else(|| panic!("Could not find node ID {id}"))
+        .try_into()
+        .expect("Node index does not fit into u16")
+}
+
+/// Compile a single [`Tree`] using the execution-aware node placement algorithm
+pub(super) fn compile<F: Feature>(
+    tree: &Tree<F>,
+    strategy: PlacementStrategy,
+) -> color_eyre::Result<Vec<model::Node>> {
+    let placed_nodes = strategy.place_nodes(tree);
+    build_compiled_nodes(&placed_nodes)
+}
+
+fn execution_aware_placement<F: Feature>(tree: &Tree<F>) -> Vec<LinkedNode> {
+    // The vec containing the nodes which have already been assigned
+    let mut placed_nodes = Vec::with_capacity(tree.nodes.len());
+
+    // Nodes that haven't been placed yet
+    let mut nodes_to_place: VecDeque<_> = tree.nodes.iter().enumerate().collect();
+
+    // Keep a list of nodes that will be placed later for better optimization
+    let mut deferred_nodes: Vec<LinkedNode> = Vec::new();
+
+    let mut parent_id = None;
+    let (mut id, mut extracted_node) = nodes_to_place.pop_front().unwrap();
+    loop {
+        if let Some(n) = extracted_node.as_branch() {
+            // println!("extracted node with ID {id}: {extracted_node}");
+            // println!("unplaced_nodes: {unplaced_nodes:?}");
+
+            // Go hunting for left and right children
+            let left_child = extract_branch_if_leaf(&mut nodes_to_place, n.left);
+            let right_child = extract_branch_if_leaf(&mut nodes_to_place, n.right);
+
+            // println!(
+            //     "Node ID {id}. left: {left_child:?}, right: {right_child:?}, parent:
+            // {parent_id:?}" );
+
+            let node_to_place = LinkedNode {
+                id,
+                _parent_id: parent_id,
+                left_child,
+                right_child,
+                split_at: n.split_at.clone().into_bf16(),
+                split_with: n.split_with,
+            };
+
+            // If node is a double prediction, avoid placing it at a 128b boundary where it
+            // would be more optimal to place a node with at least one branch
+            if matches!(left_child, Branch::Prediction(_))
+                && matches!(right_child, Branch::Prediction(_))
+                && placed_nodes.len().is_multiple_of(2)
+            {
+                deferred_nodes.push(node_to_place);
+            } else {
+                placed_nodes.push(node_to_place);
+            }
+
+            parent_id = Some(id);
+
+            // Previous node was 128-bit aligned. Add one of its children right next to it
+            // to take advantage of the superscalar arch.
+            if placed_nodes.len() % 2 == 1 {
+                if let Branch::Ptr(l) = left_child {
+                    (id, extracted_node) = extract_branch(&mut nodes_to_place, l);
+                    continue;
+                } else if let Branch::Ptr(r) = right_child {
+                    (id, extracted_node) = extract_branch(&mut nodes_to_place, r);
+                    continue;
+                }
+            }
+
+            let Some((new_id, new_node)) = nodes_to_place.pop_front() else {
+                break;
+            };
+
+            id = new_id;
+            extracted_node = new_node;
+        } else {
+            unreachable!("Leaf node should have been extracted already");
+        }
+    }
+
+    // Place all nodes that hadn't been placed already
+    for d in deferred_nodes {
+        placed_nodes.push(d);
+    }
+
+    assert_eq!(nodes_to_place.len(), 0);
+    assert_utilization(&placed_nodes);
+
+    placed_nodes
+}
+
+fn random_placement<F: Feature>(tree: &Tree<F>) -> Vec<LinkedNode> {
+    use rand::seq::SliceRandom;
+
+    let mut rng = rand::rng();
+
+    // Collect only branch nodes (leaves are inlined as predictions)
+    let mut branch_indices: Vec<usize> = tree
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.is_branch())
+        .map(|(i, _)| i)
+        .collect();
+
+    branch_indices.shuffle(&mut rng);
+
+    // Ensure root is the first node in the
+    if let Some(root_pos) = branch_indices.iter().position(|&i| i == 0) {
+        branch_indices.swap(0, root_pos);
+    }
+
+    branch_indices
+        .iter()
+        .map(|&id| {
+            let branch = tree.nodes[id]
+                .as_branch()
+                .unwrap_or_else(|| panic!("Node at index {id} is a branch"));
+
+            let left_child = match &tree.nodes[branch.left] {
+                Node::Leaf(l) => Branch::Prediction(l.prediction),
+                Node::Branch(_) => Branch::Ptr(branch.left),
+            };
+
+            let right_child = match &tree.nodes[branch.right] {
+                Node::Leaf(l) => Branch::Prediction(l.prediction),
+                Node::Branch(_) => Branch::Ptr(branch.right),
+            };
+
+            LinkedNode {
+                id,
+                _parent_id: None,
+                left_child,
+                right_child,
+                split_at: branch.split_at.clone().into_bf16(),
+                split_with: branch.split_with,
+            }
+        })
+        .collect()
+}
+
+fn breadth_first_placement<F: Feature>(tree: &Tree<F>) -> Vec<LinkedNode> {
+    let mut placed_nodes = Vec::with_capacity(tree.nodes.len());
+    let mut queue = VecDeque::new();
+
+    // Find root (index 0) if it's a branch
+    if tree.nodes[0].is_branch() {
+        queue.push_back(0usize);
+    } else {
+        panic!("Tree root is not a branch node");
+    }
+
+    while let Some(id) = queue.pop_front() {
+        let branch = tree.nodes[id].as_branch().unwrap();
+
+        let left_child = match &tree.nodes[branch.left] {
+            Node::Leaf(l) => Branch::Prediction(l.prediction),
+            Node::Branch(_) => {
+                queue.push_back(branch.left);
+                Branch::Ptr(branch.left)
+            }
+        };
+
+        let right_child = match &tree.nodes[branch.right] {
+            Node::Leaf(l) => Branch::Prediction(l.prediction),
+            Node::Branch(_) => {
+                queue.push_back(branch.right);
+                Branch::Ptr(branch.right)
+            }
+        };
+
+        placed_nodes.push(LinkedNode {
+            id,
+            _parent_id: None,
+            left_child,
+            right_child,
+            split_at: branch.split_at.clone().into_bf16(),
+            split_with: branch.split_with,
+        });
+    }
+
+    placed_nodes
+}
+
+fn depth_first_placement<F: Feature>(tree: &Tree<F>) -> Vec<LinkedNode> {
+    let mut placed_nodes = Vec::with_capacity(tree.nodes.len());
+    let mut stack = Vec::new();
+
+    if tree.nodes[0].is_branch() {
+        stack.push((0usize, None));
+    } else {
+        panic!("Tree root is not a branch node");
+    }
+
+    while let Some((id, parent_id)) = stack.pop() {
+        let branch = tree.nodes[id].as_branch().unwrap();
+
+        let left_child = match &tree.nodes[branch.left] {
+            Node::Leaf(l) => Branch::Prediction(l.prediction),
+            Node::Branch(_) => Branch::Ptr(branch.left),
+        };
+
+        let right_child = match &tree.nodes[branch.right] {
+            Node::Leaf(l) => Branch::Prediction(l.prediction),
+            Node::Branch(_) => Branch::Ptr(branch.right),
+        };
+
+        placed_nodes.push(LinkedNode {
+            id,
+            _parent_id: parent_id,
+            left_child,
+            right_child,
+            split_at: branch.split_at.clone().into_bf16(),
+            split_with: branch.split_with,
+        });
+
+        // Push right before left so left is popped first (pre-order traversal)
+        if let Branch::Ptr(r) = right_child {
+            stack.push((r, Some(id)));
+        }
+        if let Branch::Ptr(l) = left_child {
+            stack.push((l, Some(id)));
+        }
+    }
+
+    placed_nodes
+}
+
+/// Check that every node at an even index has one of its children right after
+/// to maximize superscalar utilization.
+fn assert_utilization(nodes: &[LinkedNode]) {
+    for cache_line in nodes.chunks(2) {
+        // The acceptable case is if both nodes in the
+        // cache line are double predictions (ie, have no pointers).
+        if cache_line.len() == 2 {
+            if cache_line[0].left_child.is_prediction()
+                && cache_line[0].right_child.is_prediction()
+                && cache_line[1].left_child.is_prediction()
+                && cache_line[1].right_child.is_prediction()
+            {
+                continue;
+            }
+
+            let mut utilization_is_maximized = false;
+            if let Branch::Ptr(ptr) = cache_line[0].left_child {
+                utilization_is_maximized = ptr == cache_line[1].id;
+            }
+
+            if let Branch::Ptr(ptr) = cache_line[0].right_child
+                && !utilization_is_maximized
+            {
+                utilization_is_maximized = ptr == cache_line[1].id;
+            }
+
+            assert!(utilization_is_maximized);
+        }
+    }
+}
+
+fn build_compiled_nodes(placed_nodes: &[LinkedNode]) -> color_eyre::Result<Vec<model::Node>> {
+    // Optionally, add extra padding at the end to make the tree length even
+    let tail_padding = usize::from(!placed_nodes.len().is_multiple_of(2));
+
+    // Add header + padding for full tree length
+    let tree_len: u32 = (placed_nodes.len() + tail_padding + 2)
+        .try_into()
+        .context("Tree length should fit into u32")?;
+
+    // We now have a Vec of LinkedNodes in the correct order. Me must now convert it
+    // into a Vec of model::Node, and adjut the child pointers accordingly.
+    let mut compiled_nodes = Vec::with_capacity(tree_len as usize);
+
+    // Add header + padding at beginning
+    // Leave cache metadata empty. It will be written as necessary at the cache
+    // split step.
+    let cache_metadata = CacheMetadata::new_empty();
+    let header = [
+        lumberjack_model::model::Node::from_header(
+            TreeHeader::new(tree_len, 2, cache_metadata)
+                .map_err(|e| eyre!("Cannot compile model: {e:?}"))?,
+        ),
+        PADDING,
+    ];
+    let header_len: u16 = header.len().try_into().unwrap();
+    compiled_nodes.extend(header);
+
+    for node in placed_nodes {
+        let left = match node.left_child {
+            Branch::Ptr(id) => position_of(placed_nodes, id) + header_len,
+            Branch::Prediction(p) => p,
+        };
+
+        let right = match node.right_child {
+            Branch::Ptr(id) => position_of(placed_nodes, id) + header_len,
+            Branch::Prediction(p) => p,
+        };
+
+        compiled_nodes.push(lumberjack_model::model::Node::from_branch(
+            lumberjack_model::model::Branch::new(
+                node.split_with,
+                node.split_at,
+                left,
+                right,
+                node.left_child.is_prediction(),
+                node.right_child.is_prediction(),
+            ),
+        ));
+    }
+
+    compiled_nodes.extend(std::iter::repeat_n(PADDING, tail_padding));
+
+    assert_eq!(compiled_nodes.len(), tree_len as usize);
+
+    Ok(compiled_nodes)
+}

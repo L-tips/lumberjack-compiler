@@ -330,7 +330,9 @@ impl<'data> Model<'data> {
         self.num_features
     }
 
-    pub fn verify(&self) -> Result<(), Error> {
+    /// Verify that the forest is linesr (ie, all child nodes are at a larger
+    /// index than their parents)
+    pub fn verify_linear(&self) -> Result<(), Error> {
         let nodes_len = self.nodes().len();
 
         let mut num_trees = 0;
@@ -443,7 +445,8 @@ impl<'data> Model<'data> {
             .unwrap()
     }
 
-    /// Get the header and nodes of the tree that starts at the provided index
+    /// Get the header and node slice of the tree that starts at the provided
+    /// index
     pub fn get_tree(&self, header_idx: usize) -> (&TreeHeader, &[Node]) {
         let header = self.nodes[header_idx].as_header();
 

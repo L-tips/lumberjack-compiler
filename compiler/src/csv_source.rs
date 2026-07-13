@@ -1,5 +1,5 @@
 use crate::compiled_model;
-use crate::compiler::{BranchNode, LeafNode, Node, Tree};
+use crate::ir::{BranchNode, LeafNode, Node, PartitionStrategy, PlacementStrategy, Tree};
 use crate::problem::{Map, ProblemDefinition};
 use std::fmt::Debug;
 use std::{
@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer};
 
 use lumberjack_model::model::Model;
 
-use crate::compiler::IntermediateRepresentation;
+use crate::ir::IntermediateRepresentation;
 
 /// A single node of a [`SerializedForest`] in classification mode
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -232,6 +232,8 @@ pub fn compile_from_csv(
     output: Option<impl AsRef<Path>>,
     num_cells: u8,
     analyze: bool,
+    placement_strategy: PlacementStrategy,
+    partition_strategy: PartitionStrategy,
 ) -> Result<()> {
     // Read the input file
     let serialized =
@@ -239,7 +241,7 @@ pub fn compile_from_csv(
     let forest = serialized.lower_to_ir()?;
 
     // Compile the forest model
-    let nodes = forest.compile(num_cells)?;
+    let nodes = forest.compile(num_cells, placement_strategy, partition_strategy)?;
     let compiled = Model::new(
         forest.num_trees().try_into().unwrap(),
         num_cells,
@@ -273,6 +275,8 @@ pub fn compile_split_caches_from_csv(
     prefix: Option<String>,
     num_cells: u8,
     analyze: bool,
+    placement_strategy: PlacementStrategy,
+    partition_strategy: PartitionStrategy,
 ) -> Result<()> {
     let dir = dir.as_ref();
     if !dir.is_dir() || !std::fs::exists(dir)? {
@@ -288,7 +292,7 @@ pub fn compile_split_caches_from_csv(
     let forest = serialized.lower_to_ir()?;
 
     // Compile the forest
-    let nodes = forest.compile(num_cells)?;
+    let nodes = forest.compile(num_cells, placement_strategy, partition_strategy)?;
     let compiled = Model::new(
         forest.num_trees().try_into().unwrap(),
         num_cells,

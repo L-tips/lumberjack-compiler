@@ -4,8 +4,9 @@ use color_eyre::{
     eyre::{Context, eyre},
 };
 use lumberjack_compiler::{
-    compiled_model,
+    PlacementStrategy, compiled_model,
     csv_source::{compile_from_csv, compile_split_caches_from_csv},
+    ir::PartitionStrategy,
 };
 use lumberjack_model::Model;
 
@@ -23,7 +24,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Compile a .lumberjack from a CSV definition
+    /// Compile a .ljmodelfrom a CSV definition
     #[command(arg_required_else_help = true)]
     Build {
         /// Input model to compile (CSV)
@@ -41,6 +42,14 @@ enum Command {
         /// Also output analysis information about the compiled model to stdout
         #[arg(short = 'a', long = "analyze")]
         analyze: bool,
+
+        /// Node placement strategy (default: execution-aware)
+        #[arg(short = 's', long = "placement-strategy", value_name = "STRATEGY")]
+        placement_strategy: Option<PlacementStrategy>,
+
+        /// Cell cache partitioning strategy (default: Equal)
+        #[arg(short = 'r', long = "partition-strategy", value_name = "STRATEGY")]
+        partition_strategy: Option<PartitionStrategy>,
     },
 
     /// Compile a Lumberjack model from a CSV definition, splitting it into
@@ -65,9 +74,17 @@ enum Command {
         /// Also output analysis information about the compiled model to stdout
         #[arg(short = 'a', long = "analyze")]
         analyze: bool,
+
+        /// Node placement strategy (default: execution-aware)
+        #[arg(short = 's', long = "placement-strategy", value_name = "STRATEGY")]
+        placement_strategy: Option<PlacementStrategy>,
+
+        /// Cell cache partitioning strategy (default: Equal)
+        #[arg(short = 'r', long = "partition-strategy", value_name = "STRATEGY")]
+        partition_strategy: Option<PartitionStrategy>,
     },
 
-    /// Analyze a compiled .lumberjack model
+    /// Analyze a compiled .ljmodel model
     #[command(arg_required_else_help = true)]
     Analyze {
         /// Path to a compiled model to analyze
@@ -85,8 +102,17 @@ fn main() -> Result<()> {
             output,
             analyze,
             num_cells,
+            placement_strategy,
+            partition_strategy,
         } => {
-            compile_from_csv(input, output, num_cells, analyze)?;
+            compile_from_csv(
+                input,
+                output,
+                num_cells,
+                analyze,
+                placement_strategy.unwrap_or_default(),
+                partition_strategy.unwrap_or_default(),
+            )?;
         }
 
         Command::BuildCacheData {
@@ -95,8 +121,18 @@ fn main() -> Result<()> {
             prefix,
             num_cells,
             analyze,
+            placement_strategy,
+            partition_strategy,
         } => {
-            compile_split_caches_from_csv(input, dir, prefix, num_cells, analyze)?;
+            compile_split_caches_from_csv(
+                input,
+                dir,
+                prefix,
+                num_cells,
+                analyze,
+                placement_strategy.unwrap_or_default(),
+                partition_strategy.unwrap_or_default(),
+            )?;
         }
 
         Command::Analyze { model } => {

@@ -2,8 +2,8 @@ use std::path::Path;
 
 use color_eyre::Result;
 
-use lumberjack_compiler::compiler::IntermediateRepresentation;
 use lumberjack_compiler::csv_source::CsvSource;
+use lumberjack_compiler::ir::IntermediateRepresentation;
 
 /// Parse a CSV source into an [`IntermediateRepresentation`], given a path to
 /// the source.
