@@ -1,5 +1,6 @@
+use std::cmp::PartialOrd;
 use std::collections::{HashMap, VecDeque};
-use std::fmt;
+use std::fmt::{self, Display};
 use std::num::NonZeroU16;
 
 use color_eyre::Result;
@@ -10,15 +11,37 @@ use tap::Tap;
 
 use crate::problem::{Map, ProblemDefinition};
 
+pub trait Feature: PartialOrd<Self> + Clone {
+    const ZERO: Self;
+
+    fn into_bf16(self) -> bf16;
+}
+
+impl Feature for f32 {
+    const ZERO: f32 = 0.0_f32;
+
+    fn into_bf16(self) -> bf16 {
+        bf16::from_f32(self)
+    }
+}
+
+impl Feature for bf16 {
+    const ZERO: Self = Self::ZERO;
+
+    fn into_bf16(self) -> bf16 {
+        self
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct BranchNode {
+pub struct BranchNode<F: Feature> {
     pub(super) split_with: u16,
-    pub(super) split_at: bf16,
+    pub(super) split_at: F,
     pub(super) left: usize,
     pub(super) right: usize,
 }
 
-impl fmt::Display for BranchNode {
+impl<F: Feature + Display> Display for BranchNode<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -36,12 +59,12 @@ pub struct LeafNode {
 }
 
 #[derive(Debug, Clone)]
-pub enum Node {
+pub enum Node<F: Feature> {
     Leaf(LeafNode),
-    Branch(BranchNode),
+    Branch(BranchNode<F>),
 }
 
-impl Node {
+impl<F: Feature> Node<F> {
     pub fn is_branch(&self) -> bool {
         matches!(self, Self::Branch(_))
     }
@@ -50,7 +73,7 @@ impl Node {
         matches!(self, Self::Leaf(_))
     }
 
-    pub fn as_branch(&self) -> Option<&BranchNode> {
+    pub fn as_branch(&self) -> Option<&BranchNode<F>> {
         match self {
             Node::Branch(b) => Some(b),
             _ => None,
@@ -65,7 +88,7 @@ impl Node {
     }
 }
 
-impl fmt::Display for Node {
+impl<F: Feature + Display> Display for Node<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Node::Leaf(leaf) => write!(f, "Leaf   | prediction: {}", leaf.prediction),
@@ -75,25 +98,25 @@ impl fmt::Display for Node {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Tree {
-    nodes: Vec<Node>,
+pub(crate) struct Tree<F: Feature> {
+    nodes: Vec<Node<F>>,
 }
 
-impl Tree {
-    pub fn new(nodes: Vec<Node>) -> Self {
+impl<F: Feature> Tree<F> {
+    pub fn new(nodes: Vec<Node<F>>) -> Self {
         Self { nodes }
     }
 
-    fn next_left(&self, branch: &BranchNode) -> &Node {
+    fn next_left(&self, branch: &BranchNode<F>) -> &Node<F> {
         &self.nodes[branch.left]
     }
 
-    fn next_right(&self, branch: &BranchNode) -> &Node {
+    fn next_right(&self, branch: &BranchNode<F>) -> &Node<F> {
         &self.nodes[branch.right]
     }
 }
 
-impl fmt::Display for Tree {
+impl<F: Feature + Display> Display for Tree<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, n) in self.nodes.iter().enumerate() {
             writeln!(f, "\tNode {i}:\t{n}")?;
@@ -103,15 +126,15 @@ impl fmt::Display for Tree {
     }
 }
 
-/// An array-backed, non-optimized random forest model
+/// IR of a tree ensemble model
 #[derive(Debug)]
-pub struct ForestModel {
-    trees: Vec<Tree>,
+pub struct IntermediateRepresentation<F: Feature> {
+    trees: Vec<Tree<F>>,
     problem: ProblemDefinition,
 }
 
-impl ForestModel {
-    pub(crate) fn new(trees: Vec<Tree>, problem: ProblemDefinition) -> Self {
+impl<F: Feature> IntermediateRepresentation<F> {
+    pub(crate) fn new(trees: Vec<Tree<F>>, problem: ProblemDefinition) -> Self {
         Self { trees, problem }
     }
 
@@ -160,7 +183,7 @@ impl ForestModel {
                         _parent_id: parent_id,
                         left_child,
                         right_child,
-                        split_at: n.split_at,
+                        split_at: n.split_at.clone().into_bf16(),
                         split_with: n.split_with,
                     };
 
@@ -263,12 +286,12 @@ impl ForestModel {
 
             for node in &placed_nodes {
                 let left = match node.left_child {
-                    Branch::Ptr(id) => id_position(&placed_nodes, id) + 2,
+                    Branch::Ptr(id) => position_of(&placed_nodes, id) + 2,
                     Branch::Prediction(p) => p,
                 };
 
                 let right = match node.right_child {
-                    Branch::Ptr(id) => id_position(&placed_nodes, id) + 2,
+                    Branch::Ptr(id) => position_of(&placed_nodes, id) + 2,
                     Branch::Prediction(p) => p,
                 };
 
@@ -322,9 +345,26 @@ impl ForestModel {
 
     /// Make a prediction based on input feature vector. Returns a tuple
     /// containing the prediction, and its number of votes.
-    pub fn predict(&self, features: &[bf16]) -> (String, usize) {
-        // Reserve space to store each tree's prediction
-        let mut results = Vec::with_capacity(self.num_trees());
+    pub fn predict<'a, 's: 'a>(&'s self, features: &[F]) -> (&'a str, usize) {
+        let votes = self.prediction_votes(features);
+
+        let (best_result, num_votes) = best_result(&votes);
+
+        let prediction = self
+            .targets()
+            .iter()
+            .find(|(_, t)| **t == best_result)
+            .unwrap()
+            .0
+            .as_ref();
+
+        (prediction, num_votes)
+    }
+
+    /// Make a prediction, and return a [`HashMap`] of `(C, V)` where `C` is the
+    /// class ID and `V` its number of votes
+    pub fn prediction_votes(&self, features: &[F]) -> HashMap<u16, usize> {
+        let mut votes = HashMap::new();
 
         // Descend into each tree to make a prediction
         for tree in &self.trees {
@@ -347,38 +387,49 @@ impl ForestModel {
                 }
             };
 
-            results.push(prediction);
+            *votes.entry(prediction).or_insert(0) += 1;
         }
 
-        // Count the number of votes for each category
-        let mut votes = HashMap::new();
-        for &target in results.iter() {
-            *votes.entry(target).or_insert(0) += 1;
-        }
+        println!("votes: {votes:?}");
 
-        let best_result = votes
-            .iter()
-            .max_by(|(idx_a, votes_a), (idx_b, votes_b)| {
-                votes_a.cmp(votes_b).then_with(|| idx_b.cmp(idx_a))
-            })
-            .map(|(num, _)| num)
-            .unwrap();
-
-        let num_votes = votes.values().max().unwrap();
-
-        let prediction = self
-            .targets()
-            .iter()
-            .find(|(_, t)| *t == best_result)
-            .unwrap()
-            .0
-            .clone();
-
-        (prediction, *num_votes)
+        votes
     }
 }
 
-impl fmt::Display for ForestModel {
+impl IntermediateRepresentation<f32> {
+    /// Turn an `IntermediateRepresentation<f32>` into an
+    /// `IntermediateRepresentation<bf16>` by truncating the splits
+    pub fn quantize_splits(self) -> IntermediateRepresentation<bf16> {
+        let trees = self
+            .trees
+            .into_iter()
+            .map(|tree| {
+                let nodes = tree
+                    .nodes
+                    .into_iter()
+                    .map(|node| match node {
+                        Node::Leaf(leaf) => Node::Leaf(leaf),
+                        Node::Branch(branch) => Node::Branch(BranchNode {
+                            split_with: branch.split_with,
+                            split_at: bf16::from_f32(branch.split_at),
+                            left: branch.left,
+                            right: branch.right,
+                        }),
+                    })
+                    .collect();
+
+                Tree::new(nodes)
+            })
+            .collect();
+
+        IntermediateRepresentation {
+            trees,
+            problem: self.problem,
+        }
+    }
+}
+
+impl<F: Feature + Display> Display for IntermediateRepresentation<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,
@@ -442,7 +493,7 @@ struct LinkedNode {
     _parent_id: Option<usize>,
 }
 
-impl fmt::Display for LinkedNode {
+impl Display for LinkedNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -452,8 +503,25 @@ impl fmt::Display for LinkedNode {
     }
 }
 
+/// Given a map of class votes, return the best class ID and its number of
+/// votes.
+///
+/// A tie breaker selects the lowest class index in case of a tie.
+pub fn best_result(votes: &HashMap<u16, usize>) -> (u16, usize) {
+    let (id, votes) = votes
+        .iter()
+        .max_by(|(idx_a, votes_a), (idx_b, votes_b)| {
+            votes_a.cmp(votes_b).then_with(|| idx_b.cmp(idx_a))
+        })
+        .unwrap();
+    (*id, *votes)
+}
+
 /// Extract the node from the queue if it's a leaf, otherwise leave it in.
-fn extract_branch_if_leaf(unplaced_nodes: &mut VecDeque<(usize, &Node)>, id: usize) -> Branch {
+fn extract_branch_if_leaf<F: Feature>(
+    unplaced_nodes: &mut VecDeque<(usize, &Node<F>)>,
+    id: usize,
+) -> Branch {
     let node = unplaced_nodes
         .iter()
         .find(|(i, _)| *i == id)
@@ -470,15 +538,15 @@ fn extract_branch_if_leaf(unplaced_nodes: &mut VecDeque<(usize, &Node)>, id: usi
     }
 }
 
-fn extract_branch<'a>(
-    unplaced_nodes: &mut VecDeque<(usize, &'a Node)>,
+fn extract_branch<'a, F: Feature>(
+    unplaced_nodes: &mut VecDeque<(usize, &'a Node<F>)>,
     id: usize,
-) -> (usize, &'a Node) {
+) -> (usize, &'a Node<F>) {
     let pos = unplaced_nodes.iter().position(|(i, _)| *i == id).unwrap();
     unplaced_nodes.remove(pos).unwrap()
 }
 
-fn id_position(nodes: &[LinkedNode], id: usize) -> u16 {
+fn position_of(nodes: &[LinkedNode], id: usize) -> u16 {
     nodes
         .iter()
         .position(|n| n.id == id)

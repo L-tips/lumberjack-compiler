@@ -5,7 +5,7 @@ use color_eyre::{
 };
 use lumberjack_compiler::{
     compiled_model,
-    csv_forest::{compile_from_csv, compile_split_caches_from_csv},
+    csv_source::{compile_from_csv, compile_split_caches_from_csv},
 };
 use lumberjack_model::Model;
 

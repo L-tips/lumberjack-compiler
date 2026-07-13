@@ -1,12 +1,13 @@
-use std::{fmt::Debug, path::Path};
+use std::{fmt::Debug, path::Path, str::FromStr};
 
 use color_eyre::eyre::{Context, eyre};
-use half::bf16;
+
+use crate::compiler::Feature;
 
 pub type Map = indexmap::IndexMap<String, u16>;
 
-pub struct DataPoint {
-    pub features: Vec<bf16>,
+pub struct DataPoint<F: Feature> {
+    pub features: Vec<F>,
     /// Prediction as given by the reference software model
     pub reference_prediction: u16,
 }
@@ -37,16 +38,14 @@ impl ProblemDefinition {
     /// Read a list of feature vectors from a CSV file. Must contain a column
     /// named `prediction`, which is the predicted class from the trained model.
     /// This can be used to verify the fidelity of the compiled model.
-    ///
-    /// # Returns
-    ///
-    /// - A `Vec<(Vec<bf16>, u16)>`, the `Vec<bf16>` being the feature vector
-    ///   ordered by feature index, and the `u16` being the trained model's
-    ///   prediction.
-    pub fn features_vector_from_csv(
+    pub fn features_vector_from_csv<F>(
         &self,
         csv_path: impl AsRef<Path>,
-    ) -> color_eyre::Result<Vec<DataPoint>> {
+    ) -> color_eyre::Result<Vec<DataPoint<F>>>
+    where
+        F: Feature + FromStr,
+        <F as std::str::FromStr>::Err: Send + Sync + std::error::Error + 'static,
+    {
         let features_map = self.features();
         let targets_map = self.targets();
 
@@ -80,7 +79,7 @@ impl ProblemDefinition {
 
         for record in rdr.records() {
             let record = record.context("bad CSV row")?;
-            let mut row = vec![bf16::ZERO; num_features];
+            let mut row = vec![F::ZERO; num_features];
 
             let pred_str = record
                 .get(prediction_col_idx)
@@ -91,7 +90,7 @@ impl ProblemDefinition {
 
             for (csv_col_idx, value) in record.iter().enumerate() {
                 if let Some(Some(feature_idx)) = col_to_feature_idx.get(csv_col_idx) {
-                    let val: bf16 = value.parse().context(format!("invalid float: {value}"))?;
+                    let val: F = value.parse().context(format!("invalid float: {value}"))?;
                     row[*feature_idx as usize] = val;
                 }
             }

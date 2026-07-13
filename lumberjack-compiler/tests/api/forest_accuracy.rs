@@ -2,19 +2,38 @@ use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use lumberjack_model::model::Model;
 
-use crate::helpers::get_forest;
+use crate::helpers::parse_source;
 
 #[test]
-fn raw_model_accuracy_iris_800_trees() -> Result<()> {
-    let forest = get_forest("./tests/test-forests/forest_iris_800.csv")?;
-    let test_data = forest
+fn ir_accuracy_iris_800_trees_f32() -> Result<()> {
+    let ir = parse_source("./tests/test-forests/forest_iris_800.csv")?;
+    let test_data = ir
         .problem()
         .features_vector_from_csv("./tests/test-data/iris.csv")?;
-    let targets_map = forest.targets();
+    let targets_map = ir.targets();
 
     for datapoint in test_data {
-        let prediction = forest.predict(&datapoint.features);
-        let pred_idx = targets_map.get(&prediction.0).expect("target not found");
+        let prediction = ir.predict(&datapoint.features);
+        let pred_idx = targets_map.get(prediction.0).expect("target not found");
+        assert_eq!(*pred_idx, datapoint.reference_prediction);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn ir_accuracy_iris_800_trees_quantized() -> Result<()> {
+    let ir = parse_source("./tests/test-forests/forest_iris_800.csv")?;
+    let ir = ir.quantize_splits();
+
+    let test_data = ir
+        .problem()
+        .features_vector_from_csv("./tests/test-data/iris.csv")?;
+    let targets_map = ir.targets();
+
+    for datapoint in test_data {
+        let prediction = ir.predict(&datapoint.features);
+        let pred_idx = targets_map.get(prediction.0).expect("target not found");
         assert_eq!(*pred_idx, datapoint.reference_prediction);
     }
 
@@ -23,7 +42,7 @@ fn raw_model_accuracy_iris_800_trees() -> Result<()> {
 
 #[test]
 fn compiled_model_accuracy_iris_800_trees() -> Result<()> {
-    let forest = get_forest("./tests/test-forests/forest_iris_800.csv")?;
+    let forest = parse_source("./tests/test-forests/forest_iris_800.csv")?;
 
     let nodes = forest.compile(0)?;
     let optimized = Model::new(
@@ -46,7 +65,7 @@ fn compiled_model_accuracy_iris_800_trees() -> Result<()> {
 
     for datapoint in test_data {
         let prediction = forest.predict(&datapoint.features);
-        let pred_idx = targets_map.get(&prediction.0).expect("target not found");
+        let pred_idx = targets_map.get(prediction.0).expect("target not found");
         assert_eq!(*pred_idx, datapoint.reference_prediction);
     }
 

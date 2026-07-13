@@ -9,13 +9,12 @@ use std::{
 };
 
 use color_eyre::eyre::{Context, OptionExt, Result, eyre};
-use half::bf16;
 use indexmap::map::Entry;
 use serde::{Deserialize, Deserializer};
 
 use lumberjack_model::model::Model;
 
-use crate::compiler::ForestModel;
+use crate::compiler::IntermediateRepresentation;
 
 /// A single node of a [`SerializedForest`] in classification mode
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -94,13 +93,13 @@ impl CsvNode {
         Ok(nodes)
     }
 
-    fn normalize(self, problem: &ProblemDefinition) -> Result<Node> {
+    fn normalize(self, problem: &ProblemDefinition) -> Result<Node<f32>> {
         if self.split_on.is_some() {
             let branch = BranchNode {
                 split_with: self
                     .feature_id(problem.features())
                     .ok_or_eyre("Feature ID missing")?,
-                split_at: bf16::from_f32(self.split_at),
+                split_at: self.split_at,
                 left: self.left - 1,
                 right: self.right - 1,
             };
@@ -128,12 +127,12 @@ impl CsvNode {
 }
 
 #[derive(Debug)]
-pub struct CsvForest {
+pub struct CsvSource {
     nodes: Vec<CsvNode>,
     problem: ProblemDefinition,
 }
 
-impl CsvForest {
+impl CsvSource {
     pub fn problem(&self) -> &ProblemDefinition {
         &self.problem
     }
@@ -157,7 +156,7 @@ impl CsvForest {
         let mut problem = ProblemDefinition::default();
 
         let nodes = CsvNode::deserialize(&mut problem, &mut rdr)?;
-        Ok(CsvForest { nodes, problem })
+        Ok(CsvSource { nodes, problem })
     }
 
     /// Get the targets of this forest
@@ -165,11 +164,8 @@ impl CsvForest {
         self.problem.targets()
     }
 
-    /// Convert a [`SerializedForest`] into a [`Forest`].
-    ///
-    /// In practice, this method flattens the nodes, putting all tree roots in
-    /// front of the array.
-    pub fn into_forest_model(self) -> Result<ForestModel> {
+    /// Convert a [`CsvSource`] into an [`IntermediateRepresentation`].
+    pub fn lower_to_ir(self) -> Result<IntermediateRepresentation<f32>> {
         let problem = self.problem();
 
         // Find all nodes which have an index of 1. These are our tree roots.
@@ -222,7 +218,10 @@ impl CsvForest {
             trees.push(Tree::new(tree_nodes));
         }
 
-        Ok(ForestModel::new(trees, self.problem().clone()))
+        Ok(IntermediateRepresentation::new(
+            trees,
+            self.problem().clone(),
+        ))
     }
 }
 
@@ -236,8 +235,8 @@ pub fn compile_from_csv(
 ) -> Result<()> {
     // Read the input file
     let serialized =
-        CsvForest::read(input).context("Could not read forest definition file (CSV).")?;
-    let forest = serialized.into_forest_model()?;
+        CsvSource::read(input).context("Could not read forest definition file (CSV).")?;
+    let forest = serialized.lower_to_ir()?;
 
     // Compile the forest model
     let nodes = forest.compile(num_cells)?;
@@ -285,8 +284,8 @@ pub fn compile_split_caches_from_csv(
 
     // Read the input file
     let serialized =
-        CsvForest::read(input).context("Could not read forest definition file (CSV).")?;
-    let forest = serialized.into_forest_model()?;
+        CsvSource::read(input).context("Could not read forest definition file (CSV).")?;
+    let forest = serialized.lower_to_ir()?;
 
     // Compile the forest
     let nodes = forest.compile(num_cells)?;

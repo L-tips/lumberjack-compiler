@@ -2,11 +2,11 @@ use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use lumberjack_model::model::Model;
 
-use crate::helpers::get_forest;
+use crate::helpers::parse_source;
 
 #[test]
 fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> {
-    let forest = get_forest("./tests/test-forests/forest_iris_5.csv")?;
+    let forest = parse_source("./tests/test-forests/forest_iris_5.csv")?;
 
     let nodes = forest.compile(0)?;
     let compiled = Model::new(
@@ -39,9 +39,9 @@ fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> 
 
 #[test]
 fn classification_static_storage_deserializes_correctly() -> Result<()> {
-    let buf = lumberjack_model::static_storage!("../test-forests/forest_iris_5.rforest");
+    let buf = lumberjack_model::static_storage!("../test-forests/forest_iris_5.ljmodel");
 
-    let forest = get_forest("./tests/test-forests/forest_iris_5.csv")?;
+    let forest = parse_source("./tests/test-forests/forest_iris_5.csv")?;
 
     let deserialized = Model::deserialize(buf)
         .map_err(|e| eyre!("Malformed forest detected upon deserialization: {e:?}"))?;
