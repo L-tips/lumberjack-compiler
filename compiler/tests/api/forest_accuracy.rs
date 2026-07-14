@@ -1,7 +1,7 @@
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use lumberjack_compiler::PlacementStrategy;
-use lumberjack_compiler::ir::PartitionStrategy;
+use lumberjack_compiler::compiler::PartitionStrategy;
 use lumberjack_model::model::Model;
 
 use crate::helpers::parse_source;

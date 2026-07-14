@@ -6,7 +6,7 @@ use lumberjack_model::model::{self, CacheMetadata, PADDING, TreeHeader};
 
 use crate::{
     Feature,
-    ir::{Node, Tree},
+    compiler::{Node, Tree},
 };
 
 /// Node placement strategy for tree compilation
@@ -364,11 +364,13 @@ fn assert_utilization(nodes: &[LinkedNode]) {
 }
 
 fn build_compiled_nodes(placed_nodes: &[LinkedNode]) -> color_eyre::Result<Vec<model::Node>> {
+    const FIRST_NODE_IDX: u16 = 1;
+
     // Optionally, add extra padding at the end to make the tree length even
-    let tail_padding = usize::from(!placed_nodes.len().is_multiple_of(2));
+    let tail_padding = usize::from(placed_nodes.len().is_multiple_of(2));
 
     // Add header + padding for full tree length
-    let tree_len: u32 = (placed_nodes.len() + tail_padding + 2)
+    let tree_len: u32 = (placed_nodes.len() + tail_padding + FIRST_NODE_IDX as usize)
         .try_into()
         .context("Tree length should fit into u32")?;
 
@@ -376,17 +378,15 @@ fn build_compiled_nodes(placed_nodes: &[LinkedNode]) -> color_eyre::Result<Vec<m
     // into a Vec of model::Node, and adjut the child pointers accordingly.
     let mut compiled_nodes = Vec::with_capacity(tree_len as usize);
 
-    // Add header + padding at beginning
-    // Leave cache metadata empty. It will be written as necessary at the cache
+    // Add header at beginning. Placing the first node at index 1 takes advantage of
+    // direct execution is header is aligned.
+    // Also leave cache metadata empty. It will be written as necessary at the cache
     // split step.
-    let cache_metadata = CacheMetadata::new_empty();
-    let header = [
-        lumberjack_model::model::Node::from_header(
-            TreeHeader::new(tree_len, 2, cache_metadata)
-                .map_err(|e| eyre!("Cannot compile model: {e:?}"))?,
-        ),
-        PADDING,
-    ];
+    let empty = CacheMetadata::new_empty();
+    let header = [lumberjack_model::model::Node::from_header(
+        TreeHeader::new(tree_len, FIRST_NODE_IDX, empty)
+            .map_err(|e| eyre!("Cannot compile model: {e:?}"))?,
+    )];
     let header_len: u16 = header.len().try_into().unwrap();
     compiled_nodes.extend(header);
 
@@ -416,6 +416,7 @@ fn build_compiled_nodes(placed_nodes: &[LinkedNode]) -> color_eyre::Result<Vec<m
     compiled_nodes.extend(std::iter::repeat_n(PADDING, tail_padding));
 
     assert_eq!(compiled_nodes.len(), tree_len as usize);
+    assert!(compiled_nodes.len().is_multiple_of(2));
 
     Ok(compiled_nodes)
 }

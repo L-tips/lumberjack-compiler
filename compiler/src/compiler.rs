@@ -110,14 +110,14 @@ impl<F: Feature + Display> Display for Tree<F> {
     }
 }
 
-/// IR of a tree ensemble model
+/// Intermediate representation (IR) of a tree ensemble model
 #[derive(Debug)]
-pub struct IntermediateRepresentation<F: Feature> {
+pub struct InterRep<F: Feature> {
     trees: Vec<Tree<F>>,
     problem: ProblemDefinition,
 }
 
-impl<F: Feature> IntermediateRepresentation<F> {
+impl<F: Feature> InterRep<F> {
     pub(crate) fn new(trees: Vec<Tree<F>>, problem: ProblemDefinition) -> Self {
         Self { trees, problem }
     }
@@ -242,10 +242,10 @@ impl<F: Feature> IntermediateRepresentation<F> {
     }
 }
 
-impl IntermediateRepresentation<f32> {
+impl InterRep<f32> {
     /// Turn an `IntermediateRepresentation<f32>` into an
     /// `IntermediateRepresentation<bf16>` by truncating the splits
-    pub fn quantize_splits(self) -> IntermediateRepresentation<bf16> {
+    pub fn quantize_splits(self) -> InterRep<bf16> {
         let trees = self
             .trees
             .into_iter()
@@ -268,14 +268,14 @@ impl IntermediateRepresentation<f32> {
             })
             .collect();
 
-        IntermediateRepresentation {
+        InterRep {
             trees,
             problem: self.problem,
         }
     }
 }
 
-impl<F: Feature + Display> Display for IntermediateRepresentation<F> {
+impl<F: Feature + Display> Display for InterRep<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,

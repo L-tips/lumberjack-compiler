@@ -5,8 +5,8 @@ use color_eyre::{
 };
 use lumberjack_compiler::{
     PlacementStrategy, compiled_model,
+    compiler::PartitionStrategy,
     csv_source::{compile_from_csv, compile_split_caches_from_csv},
-    ir::PartitionStrategy,
 };
 use lumberjack_model::Model;
 

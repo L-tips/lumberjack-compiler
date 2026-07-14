@@ -1,5 +1,5 @@
 use crate::compiled_model;
-use crate::ir::{BranchNode, LeafNode, Node, PartitionStrategy, PlacementStrategy, Tree};
+use crate::compiler::{BranchNode, LeafNode, Node, PartitionStrategy, PlacementStrategy, Tree};
 use crate::problem::{Map, ProblemDefinition};
 use std::fmt::Debug;
 use std::{
@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer};
 
 use lumberjack_model::model::Model;
 
-use crate::ir::IntermediateRepresentation;
+use crate::compiler::InterRep;
 
 /// A single node of a [`SerializedForest`] in classification mode
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -165,7 +165,7 @@ impl CsvSource {
     }
 
     /// Convert a [`CsvSource`] into an [`IntermediateRepresentation`].
-    pub fn lower_to_ir(self) -> Result<IntermediateRepresentation<f32>> {
+    pub fn lower_to_ir(self) -> Result<InterRep<f32>> {
         let problem = self.problem();
 
         // Find all nodes which have an index of 1. These are our tree roots.
@@ -218,10 +218,7 @@ impl CsvSource {
             trees.push(Tree::new(tree_nodes));
         }
 
-        Ok(IntermediateRepresentation::new(
-            trees,
-            self.problem().clone(),
-        ))
+        Ok(InterRep::new(trees, self.problem().clone()))
     }
 }
 

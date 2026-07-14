@@ -6,7 +6,7 @@ use lumberjack_model::{
     model::{Node, iter_trees},
 };
 
-use crate::ir::tree_max_depth;
+use crate::compiler::tree_max_depth;
 
 /// Perform an analysis of the model, and output some useful metrics to stdout.
 ///
