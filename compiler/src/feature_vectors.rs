@@ -1,4 +1,4 @@
-use std::{fmt::Display, path::Path, str::FromStr};
+use std::{fmt::Display, iter::once, path::Path, str::FromStr};
 
 use color_eyre::{
     Result,
@@ -98,7 +98,8 @@ pub fn write_test_vectors<F: Feature + Display>(
     let headers = (0..vectors[0].features.len())
         .into_iter()
         .map(|c| c.to_string())
-        .chain(std::iter::once("prediction".to_string()));
+        .chain(once("prediction".to_string()))
+        .chain(once("num_votes".to_string()));
 
     writer.write_record(headers)?;
 
@@ -113,8 +114,9 @@ pub fn write_test_vectors<F: Feature + Display>(
         let record = datapoint
             .features
             .iter()
-            .map(|f| format!("{f}",))
-            .chain(std::iter::once(format!("{prediction_idx}")));
+            .map(|f| f.to_string())
+            .chain(once(prediction_idx.to_string()))
+            .chain(once(prediction.1.to_string()));
         writer.write_record(record)?;
     }
 
