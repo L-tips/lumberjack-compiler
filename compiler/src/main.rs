@@ -10,6 +10,7 @@ use lumberjack_compiler::{
     feature_vectors::{features_vector_from_csv, write_test_vectors},
 };
 use lumberjack_model::Model;
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use std::{
     io::{BufReader, Read},
@@ -109,6 +110,11 @@ enum Command {
 
 fn main() -> Result<()> {
     color_eyre::install()?;
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")))
+        .init();
+
     let args = Cli::parse();
 
     match args.command {

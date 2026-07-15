@@ -14,9 +14,9 @@ use crate::compiler::tree_max_depth;
 /// will also info about the cell utilization.
 pub fn analyze(model: &Model) {
     println!("--- Lumberjack model analysis ---");
-    model
-        .verify_linear()
-        .unwrap_or_else(|e| panic!("Could not verify forest: {e:?}"));
+    if let Err(e) = model.verify_linear() {
+        tracing::warn!("Could not verify forest is linear: {e:?}")
+    }
 
     println!(
         "Random forest model with:\n\t- {} trees\n\t- {} features\n\t- {} targets\n\t- {} cells",
