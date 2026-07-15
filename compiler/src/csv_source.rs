@@ -309,7 +309,7 @@ pub fn compile_split_caches_from_csv(
         .enumerate()
     {
         let prefix = prefix.as_deref().unwrap_or("cache_data");
-        let out_path = dir.join(format!("{prefix}_{i}.lj_data"));
+        let out_path = dir.join(format!("{prefix}_{i}.ljcache"));
         let mut output_file = File::create(out_path).context("Could not create output file")?;
 
         output_file.write_all(lumberjack_model::model::Node::slice_as_bytes(cache_data))?;

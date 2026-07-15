@@ -6,7 +6,8 @@ use color_eyre::{
 use lumberjack_compiler::{
     PlacementStrategy, compiled_model,
     compiler::PartitionStrategy,
-    csv_source::{compile_from_csv, compile_split_caches_from_csv},
+    csv_source::{CsvSource, compile_from_csv, compile_split_caches_from_csv},
+    feature_vectors::{features_vector_from_csv, write_test_vectors},
 };
 use lumberjack_model::Model;
 
@@ -24,7 +25,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Compile a .ljmodelfrom a CSV definition
+    /// Compile a .ljmodel from a CSV definition
     #[command(arg_required_else_help = true)]
     Build {
         /// Input model to compile (CSV)
@@ -53,7 +54,7 @@ enum Command {
     },
 
     /// Compile a Lumberjack model from a CSV definition, splitting it into
-    /// per-cell cache .lj_data files
+    /// per-cell cache .ljcache files
     #[command(arg_required_else_help = true)]
     BuildCacheData {
         /// Input model to compile (CSV)
@@ -82,6 +83,20 @@ enum Command {
         /// Cell cache partitioning strategy (default: Equal)
         #[arg(short = 'r', long = "partition-strategy", value_name = "STRATEGY")]
         partition_strategy: Option<PartitionStrategy>,
+    },
+
+    /// Compile .ljdata test vectors from a CSV model file, and a CSV test
+    /// vectors file
+    #[command(arg_required_else_help = true)]
+    BuildTestVectors {
+        /// Input model to compile (CSV)
+        model_path: PathBuf,
+
+        #[arg(short = 'v', long = "vectors", value_name = "VECTORS_INPUT")]
+        vectors_path: PathBuf,
+
+        #[arg(short = 'o', long = "output", value_name = "OUTPUT_FILE")]
+        output: PathBuf,
     },
 
     /// Analyze a compiled .ljmodel model
@@ -133,6 +148,21 @@ fn main() -> Result<()> {
                 placement_strategy.unwrap_or_default(),
                 partition_strategy.unwrap_or_default(),
             )?;
+        }
+
+        Command::BuildTestVectors {
+            model_path,
+            vectors_path,
+            output,
+        } => {
+            let serialized = CsvSource::read(model_path)
+                .context("Could not read forest definition file (CSV).")?;
+            let model = serialized.lower_to_ir()?.quantize_splits();
+
+            let vectors = features_vector_from_csv(model.problem(), vectors_path)
+                .context("Could not open feature vectors file")?;
+
+            write_test_vectors(&model, &vectors, output)?;
         }
 
         Command::Analyze { model } => {
