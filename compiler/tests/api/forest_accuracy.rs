@@ -58,7 +58,7 @@ fn compiled_model_accuracy_iris_800_trees() -> Result<()> {
     .map_err(|e| eyre!("Malformed forest: {e:?}"))?;
 
     compiled
-        .verify_linear()
+        .verify_acyclic()
         .map_err(|e| eyre!("Malformed forest detected upon verification: {e:?}"))?;
 
     let test_data = features_vector_from_csv(model.problem(), "./tests/test-data/iris.csv")?;

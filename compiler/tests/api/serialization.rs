@@ -26,7 +26,7 @@ fn serialized_then_deserialized_classification_tree_is_accurate() -> Result<()> 
     .map_err(|e| eyre!("Malformed forest: {e:?}"))?;
 
     compiled
-        .verify_linear()
+        .verify_acyclic()
         .map_err(|e| eyre!("Malformed forest detected upon verification: {e:?}"))?;
 
     let serialized = compiled.serialize();
@@ -52,8 +52,8 @@ fn classification_static_storage_deserializes_correctly() -> Result<()> {
         .map_err(|e| eyre!("Malformed forest detected upon deserialization: {e:?}"))?;
 
     deserialized
-        .verify_linear()
-        .map_err(|_| eyre!("Malformed forest detected upon verification"))?;
+        .verify_acyclic()
+        .map_err(|e| eyre!("Malformed forest detected upon verification: {e:?}"))?;
 
     let test_data = features_vector_from_csv(ir.problem(), "./tests/test-data/iris.csv")?;
 

@@ -73,6 +73,10 @@ impl Flags {
         (self.0 >> (16 - 2)) & 1 != 0
     }
 
+    pub fn both_predictions(&self) -> bool {
+        self.left_prediction() && self.right_prediction()
+    }
+
     pub fn split_var_idx(&self) -> u16 {
         (self.0 & (u16::MAX >> 2)).get()
     }
@@ -330,12 +334,15 @@ impl<'data> Model<'data> {
         self.num_features
     }
 
-    /// Verify that the forest is linesr (ie, all child nodes are at a larger
-    /// index than their parents)
-    pub fn verify_linear(&self) -> Result<(), Error> {
-        let nodes_len = self.nodes().len();
+    /// Verify that the forest contains no circular references
+    #[cfg(feature = "std")]
+    pub fn verify_acyclic(&self) -> Result<(), Error> {
+        use std::collections::{HashMap, HashSet};
+        use std::vec::Vec;
 
+        let nodes_len = self.nodes().len();
         let mut num_trees = 0;
+
         for header_idx in self.tree_headers() {
             num_trees += 1;
             let (header, tree_nodes) = self.get_tree(header_idx);
@@ -344,34 +351,94 @@ impl<'data> Model<'data> {
                 return Err(Error::MisalignedData);
             }
 
-            for (i, node) in tree_nodes
-                .iter()
-                .enumerate()
-                .skip(header.first_node_idx() as _)
-            {
-                // Skip padding
+            // DFS cycle detection using three-color marking:
+            // White (absent) = unvisited, Gray (false) = in current path, Black (true) =
+            // done
+            let mut state: HashMap<usize, bool> = HashMap::new();
+
+            let root_idx = header.first_node_idx() as usize;
+
+            // Find the root: the one node not referenced as a child by any other node
+            let mut referenced = HashSet::new();
+            for node in tree_nodes.iter().skip(root_idx) {
                 if node.is_padding() {
                     continue;
                 }
+                let branch = node.as_branch();
+                if !branch.flags().left_prediction() {
+                    let ptr = branch.left_ptr().get() as usize;
+                    if ptr < nodes_len {
+                        referenced.insert(ptr);
+                    }
+                }
+                if !branch.flags().right_prediction() {
+                    let ptr = branch.right_ptr().get() as usize;
+                    if ptr < nodes_len {
+                        referenced.insert(ptr);
+                    }
+                }
+            }
+            let root = tree_nodes
+                .iter()
+                .enumerate()
+                .skip(root_idx)
+                .find(|(i, n)| !n.is_padding() && !referenced.contains(i))
+                .map(|(i, _)| i)
+                .ok_or(Error::MalformedForest)?;
+
+            // Iterative DFS with explicit stack to avoid stack overflow on deep trees.
+            // Each stack entry is (node_idx, already_pushed_children).
+            let mut stack: Vec<(usize, bool)> = vec![(root, false)];
+
+            while let Some((idx, children_pushed)) = stack.last_mut() {
+                let idx = *idx;
+
+                if *children_pushed {
+                    // All descendants processed — mark black (done)
+                    stack.pop();
+                    state.insert(idx, true);
+                    continue;
+                }
+
+                *children_pushed = true;
+
+                match state.get(&idx) {
+                    Some(true) => {
+                        // Already fully processed, skip
+                        stack.pop();
+                        continue;
+                    }
+                    Some(false) => {
+                        // Encountered a gray node — cycle detected
+                        return Err(Error::CyclicTree);
+                    }
+                    None => {}
+                }
+
+                // Validate index is in bounds
+                if idx >= nodes_len {
+                    return Err(Error::MalformedForest);
+                }
+
+                let node = &tree_nodes[idx];
+                if node.is_padding() {
+                    return Err(Error::MalformedForest);
+                }
+
+                // Mark gray (in current path)
+                state.insert(idx, false);
 
                 let branch = node.as_branch();
-
-                let is_left_prediction = branch.flags().left_prediction();
-                let is_right_prediction = branch.flags().right_prediction();
-
-                let left_ptr = branch.left_ptr().get() as usize;
-                let right_ptr = branch.right_ptr().get() as usize;
-
-                if (!is_left_prediction && (left_ptr <= i || left_ptr >= nodes_len))
-                    || (!is_right_prediction && (right_ptr <= i || right_ptr >= nodes_len))
-                {
-                    return Err(Error::MalformedForest);
+                if !branch.flags().left_prediction() {
+                    stack.push((branch.left_ptr().get() as usize, false));
+                }
+                if !branch.flags().right_prediction() {
+                    stack.push((branch.right_ptr().get() as usize, false));
                 }
             }
         }
 
         assert_eq!(num_trees, self.num_trees());
-
         Ok(())
     }
 

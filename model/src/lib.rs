@@ -14,6 +14,7 @@ pub use storage::BackingStorage;
 pub enum Error {
     WrongProblemType,
     MalformedForest,
+    CyclicTree,
     MisalignedData,
     NoTargets,
     NoFeatures,
