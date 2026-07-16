@@ -52,7 +52,11 @@ pub fn analyze(model: &Model) {
         for (i, node) in nodes.iter().enumerate() {
             if node.is_padding() {
                 padding += 1;
-                continue;
+            }
+
+            // Check pair in header
+            if i == 0 && node.as_header().first_node_idx() == 1 {
+                paired += 1;
             }
             if !i.is_multiple_of(2) {
                 odd_idx += 1;

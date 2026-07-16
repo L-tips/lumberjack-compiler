@@ -630,13 +630,13 @@ fn depth_first_placement<F: Feature>(tree: &Tree<F>) -> Vec<LinkedNode> {
 }
 
 fn build_compiled_nodes(placed_nodes: &[LinkedNode]) -> color_eyre::Result<Vec<model::Node>> {
-    const FIRST_NODE_IDX: u16 = 1;
+    const HEADER_SIZE: u16 = 1;
 
     // Optionally, add extra padding at the end to make the tree length even
     let tail_padding = usize::from(placed_nodes.len().is_multiple_of(2));
 
     // Add header + padding for full tree length
-    let tree_len: u32 = (placed_nodes.len() + tail_padding + FIRST_NODE_IDX as usize)
+    let tree_len: u32 = (placed_nodes.len() + tail_padding + HEADER_SIZE as usize)
         .try_into()
         .context("Tree length should fit into u32")?;
 
@@ -650,7 +650,7 @@ fn build_compiled_nodes(placed_nodes: &[LinkedNode]) -> color_eyre::Result<Vec<m
     // split step.
     let empty = CacheMetadata::new_empty();
     let header = [lumberjack_model::model::Node::from_header(
-        TreeHeader::new(tree_len, FIRST_NODE_IDX, empty)
+        TreeHeader::new(tree_len, HEADER_SIZE, empty)
             .map_err(|e| eyre!("Cannot compile model: {e:?}"))?,
     )];
     let header_len: u16 = header.len().try_into().unwrap();
