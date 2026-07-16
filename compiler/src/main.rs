@@ -4,13 +4,17 @@ use color_eyre::{
     eyre::{Context, eyre},
 };
 use lumberjack_compiler::{
-    PlacementStrategy, compiled_model,
+    PlacementStrategy,
+    compiled_model::{self},
     compiler::PartitionStrategy,
-    csv_source::{CsvSource, compile_from_csv, compile_split_caches_from_csv},
+    csv_source::{
+        CsvSource, compile_from_csv, compile_split_caches_from_csv, write_analysis_results,
+    },
     feature_vectors::{features_vector_from_csv, write_test_vectors},
 };
 use lumberjack_model::Model;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use yaml_serde::{Mapping, Value};
 
 use std::{
     io::{BufReader, Read},
@@ -44,6 +48,10 @@ enum Command {
         /// Also output analysis information about the compiled model to stdout
         #[arg(short = 'a', long = "analyze")]
         analyze: bool,
+
+        /// Write model analysis results to file
+        #[arg(short = 'y', long = "write-results")]
+        write_analysis: Option<PathBuf>,
 
         /// Node placement strategy (default: execution-aware)
         #[arg(short = 's', long = "placement-strategy", value_name = "STRATEGY")]
@@ -105,6 +113,10 @@ enum Command {
     Analyze {
         /// Path to a compiled model to analyze
         model: PathBuf,
+
+        /// Write model analysis results to file
+        #[arg(short = 'y', long = "write-results")]
+        write_analysis: Option<PathBuf>,
     },
 }
 
@@ -125,6 +137,7 @@ fn main() -> Result<()> {
             num_cells,
             placement_strategy,
             partition_strategy,
+            write_analysis,
         } => {
             compile_from_csv(
                 input,
@@ -133,6 +146,7 @@ fn main() -> Result<()> {
                 analyze,
                 placement_strategy.unwrap_or_default(),
                 partition_strategy.unwrap_or_default(),
+                write_analysis,
             )?;
         }
 
@@ -171,16 +185,28 @@ fn main() -> Result<()> {
             write_test_vectors(&model, &vectors, output)?;
         }
 
-        Command::Analyze { model } => {
-            let file = std::fs::File::open(&model)
-                .context(format!("Could not open file: {}", model.display()))?;
+        Command::Analyze {
+            model: model_path,
+            write_analysis,
+        } => {
+            let file = std::fs::File::open(&model_path)
+                .context(format!("Could not open file: {}", model_path.display()))?;
             let mut file = BufReader::new(file);
             let mut buf = Vec::new();
             file.read_to_end(&mut buf)?;
             let model = Model::deserialize(&buf)
                 .map_err(|e| eyre!("Could not deserialize compiled model: {e:?}"))?;
 
-            compiled_model::analyze(&model);
+            let analysis_results = compiled_model::analyze(&model);
+            if let Some(p) = write_analysis {
+                let extra_data = [("model_path", format!("{}", model_path.display()))]
+                    .into_iter()
+                    .map(|(k, v)| (Value::from(k), Value::from(v)))
+                    .collect::<Mapping>();
+
+                let extra_data = yaml_serde::Value::Mapping(extra_data);
+                write_analysis_results(p, &analysis_results, Some(extra_data))?;
+            }
         }
     }
 

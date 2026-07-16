@@ -1,7 +1,8 @@
-use crate::compiled_model;
+use crate::compiled_model::{self, AnalysisResults};
 use crate::compiler::{BranchNode, LeafNode, Node, PartitionStrategy, PlacementStrategy, Tree};
 use crate::problem::{Map, ProblemDefinition};
 use std::fmt::Debug;
+use std::io::BufWriter;
 use std::{
     fs::File,
     io::{self, Write},
@@ -13,6 +14,7 @@ use indexmap::map::Entry;
 use serde::{Deserialize, Deserializer};
 
 use lumberjack_model::model::Model;
+use yaml_serde::{Mapping, Value};
 
 use crate::compiler::InterRep;
 
@@ -231,10 +233,11 @@ pub fn compile_from_csv(
     analyze: bool,
     placement_strategy: PlacementStrategy,
     partition_strategy: PartitionStrategy,
+    write_analysis: Option<impl AsRef<Path>>,
 ) -> Result<()> {
     // Read the input file
     let serialized =
-        CsvSource::read(input).context("Could not read forest definition file (CSV).")?;
+        CsvSource::read(&input).context("Could not read forest definition file (CSV).")?;
     let forest = serialized.lower_to_ir()?;
 
     // Compile the forest model
@@ -248,8 +251,31 @@ pub fn compile_from_csv(
     )
     .map_err(|e| eyre!("Malformed forest: {e:?}"))?;
 
-    if analyze {
-        compiled_model::analyze(&compiled);
+    if analyze || write_analysis.is_some() {
+        let analysis_results = compiled_model::analyze(&compiled);
+
+        if let Some(p) = write_analysis {
+            let extra_data = [
+                (
+                    "model_path",
+                    Value::from(format!("{}", input.as_ref().display())),
+                ),
+                (
+                    "placement_strategy",
+                    Value::from(format!("{placement_strategy}")),
+                ),
+                (
+                    "partition_strategy",
+                    Value::from(format!("{partition_strategy}")),
+                ),
+            ]
+            .into_iter()
+            .map(|(k, v)| (Value::from(k), v))
+            .collect::<Mapping>();
+
+            let extra_data = yaml_serde::Value::Mapping(extra_data);
+            write_analysis_results(p, &analysis_results, Some(extra_data))?;
+        }
     }
 
     let serialized = compiled.serialize();
@@ -333,4 +359,17 @@ where
     } else {
         Ok(Some(s))
     }
+}
+
+pub fn write_analysis_results(
+    path: impl AsRef<Path>,
+    results: &AnalysisResults,
+    extra_data: Option<yaml_serde::Value>,
+) -> color_eyre::Result<()> {
+    let mut file =
+        BufWriter::new(File::create(path).context("Failed to create analysis YAML output file")?);
+    yaml_serde::to_writer(&mut file, &extra_data)?;
+    yaml_serde::to_writer(&mut file, &results)?;
+
+    Ok(())
 }

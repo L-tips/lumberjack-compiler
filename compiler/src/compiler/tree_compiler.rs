@@ -13,7 +13,17 @@ use crate::{
 };
 
 /// Node placement strategy for tree compilation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    clap::ValueEnum,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub enum PlacementStrategy {
     #[default]
     ExecutionAware,
@@ -34,6 +44,18 @@ impl PlacementStrategy {
 
     fn place_nodes<F: Feature>(&self, tree: &Tree<F>) -> Vec<LinkedNode> {
         self.placement_fn()(tree)
+    }
+}
+
+impl fmt::Display for PlacementStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::ExecutionAware => "execution-aware",
+            Self::Random => "random",
+            Self::BreadthFirst => "breadth-first",
+            Self::DepthFirst => "depth-first",
+        };
+        f.write_str(s)
     }
 }
 

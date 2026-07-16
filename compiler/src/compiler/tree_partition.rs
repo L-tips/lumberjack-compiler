@@ -1,8 +1,20 @@
+use std::fmt;
+
 use lumberjack_model::model::Node;
 use rand::seq::SliceRandom;
 
 /// Cell partitioning strategy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    clap::ValueEnum,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub enum PartitionStrategy {
     #[default]
     EqualRandom,
@@ -21,6 +33,17 @@ impl PartitionStrategy {
 
     pub(crate) fn partition(&self, forest: &[Vec<Node>], num_cells: u8) -> Vec<Vec<Vec<Node>>> {
         self.partition_fn()(forest, num_cells)
+    }
+}
+
+impl fmt::Display for PartitionStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            PartitionStrategy::EqualRandom => "equal-random",
+            PartitionStrategy::EqualSorted => "equal-sorted",
+            PartitionStrategy::Greedy => "greedy",
+        };
+        f.write_str(s)
     }
 }
 

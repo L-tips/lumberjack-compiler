@@ -1,18 +1,60 @@
-use std::vec::Vec;
+use std::{
+    mem::{size_of, size_of_val},
+    vec::Vec,
+};
 
 use bytesize::ByteSize;
 use lumberjack_model::{
     Model,
     model::{Node, iter_trees},
 };
+use serde::Serialize;
 
 use crate::compiler::tree_max_depth;
+
+#[derive(Serialize, Clone, Debug)]
+struct TreeMetadata {
+    index: usize,
+    size: usize,
+    depth: usize,
+    good_pairs: usize,
+    guaranteed: usize,
+    cache_lines: usize,
+    padding: usize,
+    cell_header: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+struct CellMetadata {
+    index: usize,
+    num_trees: usize,
+    required_capacity: usize,
+    max_depth: usize,
+    good_pairs: usize,
+    guaranteed_pairs: usize,
+    cache_lines: usize,
+    padding: usize,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct AnalysisResults {
+    num_trees: u32,
+    num_features: u16,
+    num_targets: u16,
+    used_cells: u8,
+    total_nodes: usize,
+    total_size_bytes: usize,
+    max_tree_size: usize,
+    max_tree_depth: usize,
+    trees: Vec<TreeMetadata>,
+    cells: Vec<CellMetadata>,
+}
 
 /// Perform an analysis of the model, and output some useful metrics to stdout.
 ///
 /// The function takes a number of cells as an optional parameter. If set,
 /// will also info about the cell utilization.
-pub fn analyze(model: &Model) {
+pub fn analyze(model: &Model) -> AnalysisResults {
     println!("--- Lumberjack model analysis ---");
     if let Err(e) = model.verify_acyclic() {
         panic!("Model is malformed: {e:?}")
@@ -28,15 +70,6 @@ pub fn analyze(model: &Model) {
 
     let size_bytes = ByteSize::b(size_of_val(model.nodes()) as u64);
     println!("Total size: {} nodes ({size_bytes})", model.nodes().len(),);
-
-    struct TreeMetadata {
-        size: usize,
-        depth: usize,
-        good_pairs: usize,
-        guaranteed: usize,
-        cache_lines: usize,
-        padding: usize,
-    }
 
     let mut tree_metadata = Vec::new();
 
@@ -99,12 +132,14 @@ pub fn analyze(model: &Model) {
         );
 
         tree_metadata.push(TreeMetadata {
+            index: i,
             size: nodes.len(),
             depth: max_depth,
             good_pairs,
             guaranteed,
             cache_lines,
             padding,
+            cell_header: is_cell_header,
         });
     }
 
@@ -118,6 +153,7 @@ pub fn analyze(model: &Model) {
 
     println!("/ Cell analysis /");
 
+    let mut cell_metadata = Vec::new();
     let mut tree_idx = 0;
     for (cell_idx, start_node_idx) in model.cache_headers().enumerate() {
         let all_nodes = model.nodes();
@@ -162,7 +198,31 @@ pub fn analyze(model: &Model) {
             utilization = good_pairs as f32 / cache_lines as f32 * 100.0,
             guaranteed_utilization = guaranteed_pairs as f32 / cache_lines as f32 * 100.0
         );
+
+        cell_metadata.push(CellMetadata {
+            index: cell_idx,
+            num_trees,
+            required_capacity,
+            max_depth,
+            good_pairs,
+            guaranteed_pairs,
+            cache_lines,
+            padding,
+        });
     }
 
     println!("------");
+
+    AnalysisResults {
+        num_trees: model.num_trees(),
+        num_features: model.num_features().get(),
+        num_targets: model.num_targets().get(),
+        used_cells: model.num_cells(),
+        total_nodes: model.nodes().len(),
+        total_size_bytes: size_of_val(model.nodes()),
+        max_tree_size: max_size,
+        max_tree_depth: max_depth,
+        trees: tree_metadata,
+        cells: cell_metadata,
+    }
 }
