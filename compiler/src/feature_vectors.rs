@@ -1,9 +1,10 @@
-use std::{fmt::Display, iter::once, path::Path, str::FromStr};
+use std::{iter::once, path::Path, str::FromStr};
 
 use color_eyre::{
     Result,
     eyre::{Context, eyre},
 };
+use half::bf16;
 
 use crate::{Feature, compiler::InterRep, problem::ProblemDefinition};
 
@@ -86,9 +87,9 @@ where
     Ok(row_data)
 }
 
-pub fn write_test_vectors<F: Feature + Display>(
-    model: &InterRep<F>,
-    vectors: &[DataPoint<F>],
+pub fn write_test_vectors(
+    model: &InterRep<bf16>,
+    vectors: &[DataPoint<bf16>],
     out_path: impl AsRef<Path>,
 ) -> Result<()> {
     let mut writer = csv::WriterBuilder::new()
@@ -114,7 +115,7 @@ pub fn write_test_vectors<F: Feature + Display>(
         let record = datapoint
             .features
             .iter()
-            .map(|f| f.to_string())
+            .map(|f| format!("{:#06x}", f.to_bits()))
             .chain(once(prediction_idx.to_string()))
             .chain(once(prediction.1.to_string()));
         writer.write_record(record)?;
