@@ -18,7 +18,7 @@
         packages = {
           lumberjack-compiler = pkgs.rustPlatform.buildRustPackage {
             pname = "lumberjack-compiler";
-            version = "0.3.3";
+            version = "0.3.4";
 
             src = ./.;
 
