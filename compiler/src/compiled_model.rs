@@ -10,13 +10,15 @@ use lumberjack_model::{
 };
 use serde::Serialize;
 
-use crate::compiler::tree_max_depth;
+use crate::compiler::{tree_max_depth, tree_max_traversal_depth_superscalar};
 
 #[derive(Serialize, Clone, Debug)]
 struct TreeMetadata {
     index: usize,
     size: usize,
     depth: usize,
+    max_superscalar_fetches: usize,
+    max_non_superscalar_fetches: usize,
     good_pairs: usize,
     guaranteed: usize,
     cache_lines: usize,
@@ -30,6 +32,8 @@ struct CellMetadata {
     num_trees: usize,
     required_capacity: usize,
     max_depth: usize,
+    max_superscalar_fetches: usize,
+    max_non_superscalar_fetches: usize,
     good_pairs: usize,
     guaranteed_pairs: usize,
     cache_lines: usize,
@@ -46,6 +50,8 @@ pub struct AnalysisResults {
     total_size_bytes: usize,
     max_tree_size: usize,
     max_tree_depth: usize,
+    max_superscalar_fetches: usize,
+    max_non_superscalar_fetches: usize,
     trees: Vec<TreeMetadata>,
     cells: Vec<CellMetadata>,
 }
@@ -119,13 +125,15 @@ pub fn analyze(model: &Model) -> AnalysisResults {
 
         let is_cell_header = header.cache_metadata().is_cell_header();
         let max_depth = tree_max_depth(nodes, header.first_node_idx() as usize);
+        let max_non_superscalar_fetches = max_depth + 1;
+        let max_superscalar_fetches = tree_max_traversal_depth_superscalar(nodes, 0);
 
         let size_bytes = ByteSize::b(size_of_val(nodes) as u64);
         if is_cell_header {
             println!(" [CELL START]");
         }
         println!(
-            "Tree {i} / Size: {len} nodes ({size_bytes}) / Pair utilization: {utilization:.1}% / Guaranteed 1-cycle lines: {guaranteed_utilization:.1}% / Max depth: {max_depth}",
+            "Tree {i} / Size: {len} nodes ({size_bytes}) / Pair utilization: {utilization:.1}% / Guaranteed 1-cycle lines: {guaranteed_utilization:.1}% / Max depth: {max_depth} / Max superscalar fetches: {max_superscalar_fetches} / Max non-superscalar fetches: {max_non_superscalar_fetches}",
             len = nodes.len(),
             utilization = good_pairs as f32 / cache_lines as f32 * 100.0,
             guaranteed_utilization = guaranteed as f32 / cache_lines as f32 * 100.0
@@ -135,6 +143,8 @@ pub fn analyze(model: &Model) -> AnalysisResults {
             index: i,
             size: nodes.len(),
             depth: max_depth,
+            max_superscalar_fetches,
+            max_non_superscalar_fetches,
             good_pairs,
             guaranteed,
             cache_lines,
@@ -145,6 +155,16 @@ pub fn analyze(model: &Model) -> AnalysisResults {
 
     let max_size = tree_metadata.iter().map(|m| m.size).max().unwrap();
     let max_depth = tree_metadata.iter().map(|m| m.depth).max().unwrap();
+    let max_superscalar_fetches = tree_metadata
+        .iter()
+        .map(|m| m.max_superscalar_fetches)
+        .max()
+        .unwrap();
+    let max_non_superscalar_fetches = tree_metadata
+        .iter()
+        .map(|m| m.max_non_superscalar_fetches)
+        .max()
+        .unwrap();
 
     let size_bytes = ByteSize::b((max_size * size_of::<Node>()) as u64);
     println!();
@@ -167,6 +187,8 @@ pub fn analyze(model: &Model) -> AnalysisResults {
         let headers = iter_trees(&all_nodes[start_node_idx..]).take(num_trees as usize);
 
         let mut max_depth = 0;
+        let mut max_superscalar_fetches = 0;
+        let mut max_non_superscalar_fetches = 0;
         let mut num_trees = 0;
         let mut required_capacity = 0;
         let mut good_pairs = 0;
@@ -175,6 +197,8 @@ pub fn analyze(model: &Model) -> AnalysisResults {
         let mut padding = 0;
         for _ in headers {
             max_depth += tree_metadata[tree_idx].depth;
+            max_superscalar_fetches += tree_metadata[tree_idx].max_superscalar_fetches;
+            max_non_superscalar_fetches += tree_metadata[tree_idx].max_non_superscalar_fetches;
             num_trees += 1;
             required_capacity += tree_metadata[tree_idx].size;
             good_pairs += tree_metadata[tree_idx].good_pairs;
@@ -191,10 +215,10 @@ pub fn analyze(model: &Model) -> AnalysisResults {
   Cell {cell_idx}:
     {num_trees} trees
     {required_capacity} nodes ({size_bytes})
-    Max depth: {max_depth}
+    Max depth: {max_depth}, Max superscalar fetches: {max_superscalar_fetches}, Max non-superscalar fetches: {max_non_superscalar_fetches}
     Cache lines: {cache_lines}, padding: {padding}
-    {good_pairs} good paired nodes ({utilization:.1}% utilization)
-    {guaranteed_pairs} guaranteed 1-cycle lines ({guaranteed_utilization:.1}% utilization)"#,
+    {good_pairs} good paired lines ({utilization:.1}%)
+    {guaranteed_pairs} guaranteed 1-cycle lines ({guaranteed_utilization:.1}%)"#,
             utilization = good_pairs as f32 / cache_lines as f32 * 100.0,
             guaranteed_utilization = guaranteed_pairs as f32 / cache_lines as f32 * 100.0
         );
@@ -204,6 +228,8 @@ pub fn analyze(model: &Model) -> AnalysisResults {
             num_trees,
             required_capacity,
             max_depth,
+            max_superscalar_fetches,
+            max_non_superscalar_fetches,
             good_pairs,
             guaranteed_pairs,
             cache_lines,
@@ -222,6 +248,8 @@ pub fn analyze(model: &Model) -> AnalysisResults {
         total_size_bytes: size_of_val(model.nodes()),
         max_tree_size: max_size,
         max_tree_depth: max_depth,
+        max_superscalar_fetches,
+        max_non_superscalar_fetches,
         trees: tree_metadata,
         cells: cell_metadata,
     }

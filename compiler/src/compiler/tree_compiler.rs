@@ -4,6 +4,7 @@ use std::{
 };
 
 use color_eyre::eyre::{Context, eyre};
+use fastrand::Rng;
 use half::bf16;
 use lumberjack_model::model::{self, CacheMetadata, PADDING, TreeHeader};
 
@@ -434,90 +435,11 @@ fn execution_aware_placement<F: Feature>(tree: &Tree<F>) -> Vec<LinkedNode> {
     placed_nodes
 }
 
-// fn execution_aware_placement<F: Feature>(tree: &Tree<F>) -> Vec<LinkedNode> {
-//     // The vec containing the nodes which have already been assigned
-//     let mut placed_nodes = Vec::with_capacity(tree.nodes.len());
-
-//     // Nodes that haven't been placed yet
-//     let mut nodes_to_place: VecDeque<_> =
-// tree.nodes.iter().enumerate().collect();
-
-//     // Keep a list of nodes that will be placed later for better optimization
-//     let mut deferred_nodes: Vec<LinkedNode> = Vec::new();
-
-//     let mut parent_id = None;
-//     let (mut id, mut extracted_node) = nodes_to_place.pop_front().unwrap();
-//     loop {
-//         if let Some(n) = extracted_node.as_branch() {
-//             // println!("extracted node with ID {id}: {extracted_node}");
-//             // println!("unplaced_nodes: {unplaced_nodes:?}");
-
-//             // Go hunting for left and right children
-//             let left_child = extract_branch_if_leaf(&mut nodes_to_place,
-// n.left);             let right_child = extract_branch_if_leaf(&mut
-// nodes_to_place, n.right);
-
-//             // println!(
-//             //     "Node ID {id}. left: {left_child:?}, right:
-// {right_child:?}, parent:             // {parent_id:?}" );
-
-//             let node_to_place = LinkedNode {
-//                 id,
-//                 _parent_id: parent_id,
-//                 left_child,
-//                 right_child,
-//                 split_at: n.split_at.clone().into_bf16(),
-//                 split_with: n.split_with,
-//             };
-
-//             // If node is a double prediction, avoid placing it at a 128b
-// boundary where it             // would be more optimal to place a node with
-// at least one branch             if matches!(left_child,
-// Branch::Prediction(_))                 && matches!(right_child,
-// Branch::Prediction(_))                 &&
-// placed_nodes.len().is_multiple_of(2)             {
-//                 deferred_nodes.push(node_to_place);
-//             } else {
-//                 placed_nodes.push(node_to_place);
-//             }
-
-//             parent_id = Some(id);
-
-//             // Previous node was 128-bit aligned. Add one of its children
-// right next to it             // to take advantage of the superscalar arch.
-//             if placed_nodes.len() % 2 == 1
-//                 && let Some(next_id) = pick_next_child(tree, left_child,
-// right_child)             {
-//                 (id, extracted_node) = extract_branch(&mut nodes_to_place,
-// next_id);                 continue;
-//             }
-
-//             let Some((new_id, new_node)) = nodes_to_place.pop_front() else {
-//                 break;
-//             };
-
-//             id = new_id;
-//             extracted_node = new_node;
-//         } else {
-//             unreachable!("Leaf node should have been extracted already");
-//         }
-//     }
-
-//     // Place all nodes that hadn't been placed already
-//     for d in deferred_nodes {
-//         placed_nodes.push(d);
-//     }
-
-//     assert_eq!(nodes_to_place.len(), 0);
-//     assert_utilization(&placed_nodes);
-
-//     placed_nodes
-// }
-
+/// Place nodes in a random, but reproducible manner.
 fn random_placement<F: Feature>(tree: &Tree<F>) -> Vec<LinkedNode> {
-    use rand::seq::SliceRandom;
+    const SEED: u64 = 0xAEF3210F_2311DAFF;
 
-    let mut rng = rand::rng();
+    let mut rng = Rng::with_seed(SEED);
 
     // Collect only branch nodes (leaves are inlined as predictions)
     let mut branch_indices: Vec<usize> = tree
@@ -528,7 +450,7 @@ fn random_placement<F: Feature>(tree: &Tree<F>) -> Vec<LinkedNode> {
         .map(|(i, _)| i)
         .collect();
 
-    branch_indices.shuffle(&mut rng);
+    rng.shuffle(&mut branch_indices);
 
     // Ensure root is the first node in the
     if let Some(root_pos) = branch_indices.iter().position(|&i| i == 0) {

@@ -15,7 +15,7 @@ pub use tree_compiler::PlacementStrategy;
 
 mod tree_partition;
 pub use tree_partition::PartitionStrategy;
-pub(crate) use tree_partition::tree_max_depth;
+pub(crate) use tree_partition::{tree_max_depth, tree_max_traversal_depth_superscalar};
 
 #[derive(Debug, Clone)]
 pub struct BranchNode<F: Feature> {

@@ -89,7 +89,7 @@ enum Command {
         #[arg(short = 's', long = "placement-strategy", value_name = "STRATEGY")]
         placement_strategy: Option<PlacementStrategy>,
 
-        /// Cell cache partitioning strategy (default: Equal)
+        /// Cell cache partitioning strategy (default: greedy)
         #[arg(short = 'r', long = "partition-strategy", value_name = "STRATEGY")]
         partition_strategy: Option<PartitionStrategy>,
     },

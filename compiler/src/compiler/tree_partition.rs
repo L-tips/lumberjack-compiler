@@ -1,7 +1,7 @@
 use std::fmt;
 
+use fastrand::Rng;
 use lumberjack_model::model::Node;
-use rand::seq::SliceRandom;
 
 /// Cell partitioning strategy
 #[derive(
@@ -17,9 +17,9 @@ use rand::seq::SliceRandom;
 )]
 pub enum PartitionStrategy {
     #[default]
+    Greedy,
     EqualRandom,
     EqualSorted,
-    Greedy,
 }
 
 impl PartitionStrategy {
@@ -47,18 +47,21 @@ impl fmt::Display for PartitionStrategy {
     }
 }
 
+/// Partition trees such that each cell has an equal number of trees. Trees are
+/// shuffled in a random, but reproducible manner.
 pub fn partition_equal_random(forest: &[Vec<Node>], num_cells: u8) -> Vec<Vec<Vec<Node>>> {
+    const SEED: u64 = 0xAEF3210F_2311DAFF;
     let num_cells = num_cells as usize;
 
-    // Avoid division by zero: first cache holds all the trees
+    // Avoid division by zero if first cache holds all the trees
     if num_cells <= 1 {
         return vec![forest.to_vec()];
     }
 
-    // Sort trees in random order
+    // Sort trees in pseudo-random order
     let mut forest = forest.to_vec();
-    let mut rng = rand::rng();
-    forest.shuffle(&mut rng);
+    let mut rng = Rng::with_seed(SEED);
+    rng.shuffle(&mut forest);
 
     let n = forest.len();
     let base = n / num_cells;
@@ -76,6 +79,8 @@ pub fn partition_equal_random(forest: &[Vec<Node>], num_cells: u8) -> Vec<Vec<Ve
     result
 }
 
+/// Partition trees such that each cell has an equal number of trees. Sorted
+/// by max traversal depth in descending order.
 pub fn partition_equal_sorted(forest: &[Vec<Node>], num_cells: u8) -> Vec<Vec<Vec<Node>>> {
     let num_cells = num_cells as usize;
 
@@ -125,10 +130,7 @@ pub fn partition_greedy_search(forest: &[Vec<Node>], num_cells: u8) -> Vec<Vec<V
         .iter()
         .enumerate()
         // First node in tree is at index 2
-        .map(|(i, tree)| {
-            let first_node_idx = tree[0].as_header().first_node_idx();
-            (i, tree_max_depth(tree.as_slice(), first_node_idx as usize))
-        })
+        .map(|(i, tree)| (i, tree_max_traversal_depth_superscalar(tree.as_slice(), 0)))
         .collect();
     indexed.sort_unstable_by_key(|(_, depth)| std::cmp::Reverse(*depth));
 
@@ -184,6 +186,7 @@ pub fn partition_greedy_search(forest: &[Vec<Node>], num_cells: u8) -> Vec<Vec<V
     partitions
 }
 
+/// Get the tree's max depth in nodes
 pub(crate) fn tree_max_depth(tree_nodes: &[Node], root_idx: usize) -> usize {
     let branch = tree_nodes[root_idx].as_branch();
 
@@ -200,4 +203,58 @@ pub(crate) fn tree_max_depth(tree_nodes: &[Node], root_idx: usize) -> usize {
     };
 
     left_depth.max(right_depth)
+}
+
+/// Returns the maximum traversal depth in cache-line accesses,
+/// accounting for guaranteed superscalar hits.
+///
+/// Assumes `root_idx` is the aligned tree header.
+pub(crate) fn tree_max_traversal_depth_superscalar(tree_nodes: &[Node], root_idx: usize) -> usize {
+    assert!(root_idx.is_multiple_of(2));
+
+    let header = tree_nodes[root_idx].as_header();
+
+    // (node index, accumulated depth)
+    let mut stack = Vec::new();
+
+    let first = header.first_node_idx() as usize;
+    let first_depth = if first == 1 { 1 } else { 2 };
+
+    stack.push((first, first_depth));
+
+    let mut max_depth = first_depth;
+
+    while let Some((idx, depth)) = stack.pop() {
+        max_depth = max_depth.max(depth);
+
+        let branch = tree_nodes[idx].as_branch();
+
+        // Left child
+        if !branch.flags().left_prediction() {
+            let child = branch.left_ptr().get() as usize;
+
+            let extra = if idx.is_multiple_of(2) && child == idx + 1 {
+                0 // second node already fetched
+            } else {
+                1
+            };
+
+            stack.push((child, depth + extra));
+        }
+
+        // Right child
+        if !branch.flags().right_prediction() {
+            let child = branch.right_ptr().get() as usize;
+
+            let extra = if idx.is_multiple_of(2) && child == idx + 1 {
+                0 // second node already fetched
+            } else {
+                1
+            };
+
+            stack.push((child, depth + extra));
+        }
+    }
+
+    max_depth
 }
